@@ -25,7 +25,7 @@ firmware, not a dashboard.
 ## Quick start
 
 ```lua
-local Library = loadstring(game:HttpGet("<your-raw-url>/dist/Sable.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/dist/Sable.lua"))()
 
 local Window = Library:CreateWindow({
     Title = "Sable",
@@ -173,10 +173,14 @@ module bodies are copied verbatim and line numbers map through
 `dist/Sable.map.json`).
 
 ```
-python tools/build.py                                     # bundle only
-python tools/smoke.py                                     # headless run of the bundle
-powershell -ExecutionPolicy Bypass -File tools/check.ps1  # everything
+powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1  # once, after cloning
+powershell -ExecutionPolicy Bypass -File tools/check.ps1      # everything
+python tools/build.py                                         # bundle only
+python tools/smoke.py                                         # headless run only
 ```
+
+`bootstrap.ps1` fetches the Luau toolchain and Roblox API definitions into
+`tools/` (both gitignored). Nothing in `tools/` is needed to *use* Sable.
 
 `check.ps1` is the one command that matters. It runs four gates and fails on any
 of them:
