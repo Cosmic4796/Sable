@@ -9,9 +9,9 @@ local Base = require("elements/Base")
 
 local Input = {}
 
--- Share of the row the field occupies when there is a label to sit beside.
+-- Share of the row the field occupies when there is a label to sit beside. A
+-- ratio, not a pixel: the row splits down the middle at any column width.
 local FIELD_SCALE = 0.5
-local LABEL_GAP = 6
 
 --- Accepts a leading '-' and at most one '.', so half-typed numbers ("-", ".",
 --- "-1.") stay editable while anything non-numeric is rejected outright.
@@ -47,6 +47,11 @@ function Input.New(Library, container, index, options)
 
 	local element = Base.Create(Library, container, "Input", index, options)
 
+	local Sizes = Library.Sizes
+	-- Half a group pad of air between the label and the field; Window.lua splits
+	-- ColumnGap and GroupPad the same way.
+	local labelGap = math.ceil(Sizes.GroupPad / 2)
+
 	local numeric = options.Numeric == true
 	local finished = options.Finished == true
 	local maxLength = nil
@@ -75,9 +80,9 @@ function Input.New(Library, container, index, options)
 	if hasLabel then
 		element.Label = Library:Label({
 			Name = "Label",
-			Size = UDim2.new(1 - FIELD_SCALE, -LABEL_GAP, 1, 0),
+			Size = UDim2.new(1 - FIELD_SCALE, -labelGap, 1, 0),
 			Text = Library:FormatLabel(element.Text),
-			TextSize = Library.Sizes.Text,
+			TextSize = Sizes.Text,
 			TextTruncate = Enum.TextTruncate.AtEnd,
 			Parent = row,
 		}, element.Risky and "Risk" or "Font")
@@ -87,14 +92,17 @@ function Input.New(Library, container, index, options)
 		Name = "Field",
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
-		Size = hasLabel and UDim2.new(FIELD_SCALE, 0, 1, -2) or UDim2.new(1, 0, 1, -2),
+		-- A row gap short of the full row, so the field's hairline is not welded
+		-- to the rows above and below it.
+		Size = hasLabel and UDim2.new(FIELD_SCALE, 0, 1, -Sizes.RowGap)
+			or UDim2.new(1, 0, 1, -Sizes.RowGap),
 		ClipsDescendants = true,
 		Parent = row,
 	}, "PanelSunken", false)
 
 	local focused = false
 
-	local stroke = Util.Stroke(field, Library:GetColor("Outline"), Library.Sizes.Outline)
+	local stroke = Util.Stroke(field, Library:GetColor("Outline"), Sizes.Outline)
 	-- Registered as a resolver rather than a flat key: a live theme switch while
 	-- the field is focused must repaint to the new Accent, not to Outline.
 	Library:AddToRegistry(stroke, {
@@ -109,7 +117,7 @@ function Input.New(Library, container, index, options)
 		BorderSizePixel = 0,
 		Size = UDim2.fromScale(1, 1),
 		Font = Library.Fonts.Value,
-		TextSize = Library.Sizes.TextSmall,
+		TextSize = Sizes.TextSmall,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Center,
 		ClearTextOnFocus = options.ClearTextOnFocus ~= false,
@@ -119,7 +127,7 @@ function Input.New(Library, container, index, options)
 		Parent = field,
 	})
 
-	Util.Padding(box, 0, 4, 0, 4)
+	Util.Padding(box, 0, Sizes.RowGap, 0, Sizes.RowGap)
 
 	element.Value = initial
 	element.Field = field

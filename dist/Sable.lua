@@ -1,5 +1,5 @@
 --!nonstrict
--- Sable v1.0.0 - generated bundle. Do not edit; edit src/ and rebuild.
+-- Sable v1.1.0 - generated bundle. Do not edit; edit src/ and rebuild.
 -- 19 modules, built by tools/build.py
 
 local __modules = {}
@@ -42,38 +42,63 @@ local Overlays = {}
 -- metrics
 --==============================================================
 
-local HUD_MARGIN = 10
-local HUD_GAP = 6
-
-local WATERMARK_HEIGHT = 20
-local WATERMARK_PAD_X = 6
-local WATERMARK_SPACING = 5
 local WATERMARK_REFRESH = 0.25 -- ~4 recomputes/sec
+local NOTIFY_DEFAULT_TIME = 5
 
 -- ASCII pipe on purpose: the Code font has no box-drawing glyphs, and a missing
 -- glyph renders as tofu on some platforms.
 local SEPARATOR = "|"
 
-local BIND_ROW_HEIGHT = 16
-local BIND_PAD_X = 6
-local BIND_PAD_Y = 3
-local BIND_SPACING = 6
+-- A character budget, not a pixel one: the bind list is monospace and auto-width,
+-- so it is the glyph count that has to be bounded.
 local BIND_TEXT_MAX = 32
 
-local NOTIFY_WIDTH = 236
-local NOTIFY_BAR = 2
-local NOTIFY_PAD_X = 7
-local NOTIFY_PAD_Y = 5
-local NOTIFY_GAP = 6
-local NOTIFY_MARGIN = 12
-local NOTIFY_TITLE_HEIGHT = 14
-local NOTIFY_MIN_HEIGHT = 24
-local NOTIFY_DEFAULT_TIME = 5
+-- Unbounded height for a wrapped measurement. TextService needs a finite box;
+-- this is "taller than any notification could ever be", not a layout metric.
+local MEASURE_HEIGHT = 4096
 
 function Overlays.Install(Library)
 	local Sizes = Library.Sizes
 	local Fonts = Library.Fonts
 	local SlowTime = Library.Motion.Slow.Time
+
+	-- Half a group pad is the library's inner gap unit; Window.lua splits
+	-- ColumnGap and GroupPad the same way.
+	local halfPad = math.ceil(Sizes.GroupPad / 2)
+	local halfGap = math.ceil(Sizes.GroupGap / 2)
+
+	-- The HUD sits a group pad in from the screen edge, exactly as a groupbox
+	-- sits a group pad in from the window edge.
+	local HUD_MARGIN = Sizes.GroupPad
+	local HUD_GAP = halfGap
+
+	-- One line of chrome: the same height a row of the menu gets.
+	local WATERMARK_HEIGHT = Sizes.RowHeight
+	local WATERMARK_PAD_X = halfPad
+	local WATERMARK_SPACING = Sizes.RowGap
+
+	-- A bind row is one line of readout text plus a row gap of leading. It is
+	-- deliberately not RowHeight: the HUD list is a readout, not a control strip.
+	local BIND_ROW_HEIGHT = Sizes.TextSmall + Sizes.RowGap
+	local BIND_PAD_X = halfPad
+	local BIND_PAD_Y = Sizes.RowGap
+	local BIND_SPACING = halfPad
+	-- The row height already carries the leading, so rows only need parting.
+	local BIND_ROW_GAP = Sizes.Outline
+
+	-- A notification is one groupbox column wide, so the HUD keeps the same
+	-- rhythm as the menu: the window body minus its pad on both sides, halved
+	-- across the column gap.
+	local NOTIFY_WIDTH = math.floor((Sizes.WindowWidth - Sizes.GroupPad * 2 - Sizes.ColumnGap) / 2)
+	-- The left edge bar is an accent marker, the same weight as the tab underline.
+	local NOTIFY_BAR = Sizes.Indicator
+	local NOTIFY_PAD_X = Sizes.GroupPad
+	local NOTIFY_PAD_Y = halfPad
+	local NOTIFY_GAP = halfGap
+	local NOTIFY_MARGIN = Sizes.GroupPad
+	-- One line of title text plus a row gap of leading; same rule as a bind row.
+	local NOTIFY_TITLE_HEIGHT = Sizes.Text + Sizes.RowGap
+	local NOTIFY_MIN_HEIGHT = Sizes.RowHeight
 
 	--- Destroying an instance leaves its colour registry entries behind, and
 	--- overlays churn instances constantly -- prune before the instance dies.
@@ -270,7 +295,7 @@ function Overlays.Install(Library)
 	}, "Panel", "Outline")
 
 	Util.Padding(keybindPanel, BIND_PAD_Y, BIND_PAD_X, BIND_PAD_Y, BIND_PAD_X)
-	Util.ListLayout(keybindPanel, 1)
+	Util.ListLayout(keybindPanel, BIND_ROW_GAP)
 
 	local bindRows = {}
 	local bindCount = 0
@@ -505,12 +530,13 @@ function Overlays.Install(Library)
 		local inner = NOTIFY_WIDTH - NOTIFY_BAR - NOTIFY_PAD_X * 2
 		local bodyHeight = 0
 		if bodyText then
-			local measured = Util.TextSize(bodyText, Sizes.TextSmall, Fonts.Label, Vector2.new(inner, 4096))
-			bodyHeight = math.max(math.ceil(measured.Y), Sizes.TextSmall + 2)
+			local measured =
+				Util.TextSize(bodyText, Sizes.TextSmall, Fonts.Label, Vector2.new(inner, MEASURE_HEIGHT))
+			bodyHeight = math.max(math.ceil(measured.Y), Sizes.TextSmall + Sizes.RowGap)
 		end
 
 		local titleHeight = titleText and NOTIFY_TITLE_HEIGHT or 0
-		local innerGap = (titleText and bodyText) and 2 or 0
+		local innerGap = (titleText and bodyText) and Sizes.RowGap or 0
 		local height =
 			math.max(NOTIFY_PAD_Y * 2 + titleHeight + innerGap + bodyHeight, NOTIFY_MIN_HEIGHT)
 
@@ -771,38 +797,50 @@ Theme.Aliases = {
 -- metrics
 --==============================================================
 
--- Dense on purpose. Instrument panels pack information; they do not breathe.
+-- Dense, but not cramped. Instrument panels pack information; they still need
+-- enough air that a row reads as a row. EVERY size in the library must come
+-- from this table -- a hardcoded pixel is a bug, because it will not move when
+-- these numbers do.
 Theme.Sizes = {
-	WindowWidth = 566,
-	WindowHeight = 604,
-	WindowMinWidth = 420,
-	WindowMinHeight = 320,
+	WindowWidth = 620,
+	WindowHeight = 660,
+	WindowMinWidth = 460,
+	WindowMinHeight = 360,
 
-	TitleBar = 30,
-	TabStrip = 26,
+	TitleBar = 34,
+	TabStrip = 30,
 
-	RowHeight = 20,
-	RowGap = 2,
+	RowHeight = 26,
+	RowGap = 4,
 
-	GroupPad = 8,
-	GroupGap = 8,
-	ColumnGap = 8,
-	GroupHeader = 18,
+	GroupPad = 12,
+	GroupGap = 12,
+	ColumnGap = 12,
+	GroupHeader = 20,
 
 	Outline = 1,
-	Tick = 7, -- corner tick arm length
+	Tick = 8, -- corner tick arm length
 	TickThickness = 1,
 
-	Text = 12, -- element labels
-	TextSmall = 11, -- readouts, captions, footer
-	TextTitle = 13, -- window title, group headers
+	Text = 13, -- element labels
+	TextSmall = 12, -- readouts, captions, footer
+	TextTitle = 14, -- window title, group headers
 
-	Control = 13, -- checkbox / swatch square edge
-	Track = 8, -- slider bar height
+	Control = 15, -- checkbox / swatch square edge
+	Track = 9, -- slider bar height
 	Segments = 16, -- slider segment count
 	Indicator = 2, -- active-tab underline thickness
 
+	-- The ColorPicker's saturation/value canvas. It is the one content surface
+	-- in the library that is not a row, a control or a column, so there is
+	-- nothing honest to derive it from -- it belongs here rather than as a magic
+	-- number inside the element.
+	PickerSquare = 144,
+
 	PopupWidth = 0, -- 0 = match anchor width
+	-- Floor for popups that otherwise match their anchor's width, so a narrow
+	-- control cannot open a sliver of a list. Roughly one groupbox column.
+	PopupMinWidth = 140,
 	PopupMaxItems = 9,
 
 	ScrollBar = 3,
@@ -1817,6 +1855,14 @@ local Elements = require("elements/init")
 
 local Window = {}
 
+-- Indexes AddSettingsTab registers. "MenuKeybind" keeps its plain Linoria name
+-- so ported scripts reading Options.MenuKeybind still find it; the other two are
+-- prefixed, because a hub is far more likely to own "Watermark" than
+-- "SableWatermark" and a collision would silently replace its element.
+local MENU_KEYBIND_INDEX = "MenuKeybind"
+local WATERMARK_INDEX = "SableWatermark"
+local KEYBIND_LIST_INDEX = "SableKeybindList"
+
 function Window.Install(Library)
 	local Sizes = Library.Sizes
 
@@ -2466,6 +2512,94 @@ function Window.Install(Library)
 		return tab
 	end
 
+	--- Both addons ship with a folder already set, so this only fills in a
+	--- manager whose folder a host script cleared. SetFolder is called rather
+	--- than assigning `.Folder` because it also creates the directory on disk.
+	local function defaultFolder(manager)
+		if type(manager) ~= "table" or type(manager.SetFolder) ~= "function" then
+			return
+		end
+		if type(manager.Folder) == "string" and manager.Folder ~= "" then
+			return
+		end
+		manager:SetFolder(Library.Name)
+	end
+
+	--- The whole settings tab in one call: menu preferences, the theme editor
+	--- and the config section. Every index it registers is added to the
+	--- SaveManager ignore list, so a config file carries game settings only and
+	--- never another machine's menu keybind.
+	---
+	--- Both addons are optional here. A build with either one stripped out still
+	--- gets the Menu groupbox and a usable tab.
+	function WindowMeta:AddSettingsTab(name)
+		local tab = self:AddTab(type(name) == "string" and name ~= "" and name or "Settings")
+
+		local menu = tab:AddLeftGroupbox("Menu")
+
+		menu:AddKeyPicker(MENU_KEYBIND_INDEX, {
+			Default = Library.MenuKeybind,
+			Mode = "Toggle",
+			Text = "Menu",
+			-- The bind that opens the menu has no business in the keybind list:
+			-- it is the one bind the user cannot forget.
+			NoUI = true,
+			Tooltip = "Opens and closes the menu",
+			ChangedCallback = function(value)
+				Library:SetMenuKeybind(value)
+			end,
+		})
+
+		menu:AddToggle(WATERMARK_INDEX, {
+			Text = "Watermark",
+			Default = true,
+			Callback = function(value)
+				Library:SetWatermarkVisibility(value)
+			end,
+		})
+
+		menu:AddToggle(KEYBIND_LIST_INDEX, {
+			Text = "Keybind list",
+			Default = true,
+			Callback = function(value)
+				Library:SetKeybindVisibility(value)
+			end,
+		})
+
+		menu:AddDivider()
+
+		menu:AddButton({
+			Text = "Unload",
+			DoubleClick = true,
+			Tooltip = "Double click to remove the menu",
+			Func = function()
+				Library:Unload()
+			end,
+		})
+
+		local themeManager = Library.ThemeManager
+		local saveManager = Library.SaveManager
+
+		defaultFolder(themeManager)
+		defaultFolder(saveManager)
+
+		if type(saveManager) == "table" then
+			-- Menu preferences belong to the person, not to the config. Both
+			-- calls ADD to the ignore set, so whatever the host script already
+			-- ignored survives.
+			saveManager:IgnoreThemeSettings()
+			saveManager:SetIgnoreIndexes({ MENU_KEYBIND_INDEX, WATERMARK_INDEX, KEYBIND_LIST_INDEX })
+
+			saveManager:BuildConfigSection(tab)
+		end
+
+		if type(themeManager) == "table" then
+			themeManager:ApplyToTab(tab)
+		end
+
+		return tab
+	end
+
 	--- Library:SetOpen drives this; it is required on every window.
 	function WindowMeta:SetVisible(visible)
 		visible = visible == true
@@ -2776,8 +2910,11 @@ local NAME_INDEX = "SaveManager_ConfigName"
 local LIST_INDEX = "SaveManager_ConfigList"
 
 --- Fallback for :IgnoreThemeSettings when the ThemeManager is not reachable.
+--- Mirrors ThemeManager.Indexes; keep the two in step.
 local THEME_INDEXES = {
 	"ThemeManager_ThemeList",
+	"ThemeManager_CustomName",
+	"ThemeManager_CustomList",
 	"ThemeManager_AccentColor",
 	"ThemeManager_BackgroundColor",
 	"ThemeManager_PanelColor",
@@ -3431,10 +3568,15 @@ __modules["addons/ThemeManager"] = function()
 
 -- Sable :: addons/ThemeManager
 --
--- Colour presets plus a live per-key editor, persisted as hex under
--- <folder>/themes. Reached as Library.ThemeManager -- the spine calls
--- :SetLibrary for you; the method survives being called again so Linoria-style
--- scripts that call it themselves keep working.
+-- Colour presets, a live per-key editor, and named themes the user saves
+-- themselves -- all persisted as hex under <folder>/themes. Reached as
+-- Library.ThemeManager -- the spine calls :SetLibrary for you; the method
+-- survives being called again so Linoria-style scripts that call it themselves
+-- keep working.
+--
+-- Two kinds of file live in that folder: `default.json`, the pointer at
+-- whatever should load on startup, and one `<name>.json` per saved theme
+-- holding the whole scheme. "default" is therefore a reserved theme name.
 --
 -- Every preset keeps the warm, dark, low-chroma neutrals of the stock scheme.
 -- A theme moves the accent and nudges the greys; it never turns Sable into a
@@ -3451,10 +3593,19 @@ local KEYS = { "Accent", "Background", "Panel", "Outline", "Font" }
 --- Presentation order for the dropdown; unknown extras are appended sorted.
 local ORDER = { "Sable", "Ember", "Signal", "Ice", "Void", "Mono" }
 
+--- Stem of the pointer file :SetDefault writes, and therefore the one name a
+--- saved theme may not take.
+local DEFAULT_STEM = "default"
+
 ThemeManager.Library = nil :: any
 ThemeManager.Folder = "Sable"
 ThemeManager.Theme = "Sable"
 ThemeManager.CustomKeys = KEYS
+
+--- Name of the saved theme currently on screen, or nil while a built-in preset
+--- is live. Kept apart from .Theme because a saved theme is a whole scheme read
+--- off disk rather than one of the presets.
+ThemeManager.CustomTheme = nil :: any
 
 --- key -> hex string, only for colours the user overrode on top of the preset.
 ThemeManager.Custom = {}
@@ -3474,8 +3625,17 @@ ThemeManager.PickerIndexes = {
 	Font = "ThemeManager_FontColor",
 }
 
--- Flat list so SaveManager:IgnoreThemeSettings has one thing to read.
-ThemeManager.Indexes = { ThemeManager.ListIndex }
+ThemeManager.CustomNameIndex = "ThemeManager_CustomName"
+ThemeManager.CustomListIndex = "ThemeManager_CustomList"
+
+-- Flat list so SaveManager:IgnoreThemeSettings has one thing to read. Every
+-- control this addon owns belongs here: a config that restored the theme
+-- editor's own name box would fight with the user.
+ThemeManager.Indexes = {
+	ThemeManager.ListIndex,
+	ThemeManager.CustomNameIndex,
+	ThemeManager.CustomListIndex,
+}
 for _, key in KEYS do
 	table.insert(ThemeManager.Indexes, ThemeManager.PickerIndexes[key])
 end
@@ -3640,7 +3800,29 @@ function ThemeManager:ThemesFolder()
 end
 
 function ThemeManager:DefaultPath()
-	return self:ThemesFolder() .. "/default.json"
+	return ("%s/%s.json"):format(self:ThemesFolder(), DEFAULT_STEM)
+end
+
+function ThemeManager:ThemePath(name)
+	return ("%s/%s.json"):format(self:ThemesFolder(), name)
+end
+
+--- Theme names become file names, so anything that could walk out of the themes
+--- folder is stripped rather than rejected -- the same rule SaveManager applies
+--- to config names. Leading dots go too, so "../../evil" lands on "evil".
+function ThemeManager:Sanitize(name)
+	if type(name) ~= "string" then
+		return nil
+	end
+
+	name = name:gsub("[^%w%-%. _]", "")
+	name = name:gsub("^[%.%s]+", ""):gsub("[%.%s]+$", "")
+
+	if name == "" or name:lower() == DEFAULT_STEM then
+		return nil
+	end
+
+	return name
 end
 
 function ThemeManager:BuildFolders()
@@ -3705,7 +3887,9 @@ function ThemeManager:ApplyTheme(name)
 	end
 
 	self.Theme = name
-	-- A preset is a whole scheme, so per-key overrides are done with.
+	-- A preset is a whole scheme, so per-key overrides -- and any saved theme
+	-- that was on screen -- are done with.
+	self.CustomTheme = nil
 	table.clear(self.Custom)
 
 	Library:SetScheme(theme)
@@ -3738,15 +3922,30 @@ function ThemeManager:Reset()
 	return true
 end
 
+--- Remembers what should load on startup: a preset name (plus whatever per-key
+--- overrides sit on top of it) or the name of a saved theme. Defaults to
+--- whichever of those is currently on screen.
 function ThemeManager:SetDefault(name)
-	name = type(name) == "string" and name or self.Theme
+	name = type(name) == "string" and name or (self.CustomTheme or self.Theme)
 
-	if not self.BuiltInThemes[name] then
-		return false
+	local builtIn = self.BuiltInThemes[name] ~= nil
+	local saved = nil
+
+	if not builtIn then
+		saved = self:Sanitize(name)
+		if not saved or not Util.FS.IsFile(self:ThemePath(saved)) then
+			return false
+		end
 	end
 
-	if name ~= self.Theme then
-		self:ApplyTheme(name)
+	-- The file has to describe what the user is actually looking at, so make the
+	-- live scheme agree with the name being written before writing it.
+	if builtIn then
+		if name ~= self.Theme or self.CustomTheme ~= nil then
+			self:ApplyTheme(name)
+		end
+	elseif saved ~= self.CustomTheme and not self:ApplyCustomTheme(saved) then
+		return false
 	end
 
 	if not Util.FS.Available() then
@@ -3756,7 +3955,8 @@ function ThemeManager:SetDefault(name)
 	self:BuildFolders()
 
 	local ok = Util.FS.WriteJSON(self:DefaultPath(), {
-		Theme = name,
+		Theme = builtIn and name or saved,
+		Kind = builtIn and "builtin" or "custom",
 		Custom = Util.DeepCopy(self.Custom),
 	})
 
@@ -3767,6 +3967,16 @@ function ThemeManager:LoadDefault()
 	local data = Util.FS.ReadJSON(self:DefaultPath())
 
 	local name = data and data.Theme
+
+	-- A name that is not a preset is a saved theme, stored in its own file next
+	-- to this one. If it has since been deleted, fall through to the presets.
+	if type(name) == "string" and not self.BuiltInThemes[name] then
+		local saved = self:Sanitize(name)
+		if saved and self:ApplyCustomTheme(saved) then
+			return saved
+		end
+	end
+
 	if type(name) ~= "string" or not self.BuiltInThemes[name] then
 		name = "Sable"
 	end
@@ -3785,6 +3995,246 @@ function ThemeManager:LoadDefault()
 	self:Sync()
 
 	return self.Theme
+end
+
+--==============================================================
+-- saved themes
+--==============================================================
+
+--- The live scheme as key -> hex. HttpService cannot encode a Color3 -- it is
+--- userdata -- so a theme file is strings the whole way down.
+function ThemeManager:SchemeHex()
+	local Library = self.Library
+	local out = {}
+
+	if not Library then
+		return out
+	end
+
+	for key, color in Library.Scheme do
+		if type(key) == "string" and typeof(color) == "Color3" then
+			out[key] = Util.ToHex(color)
+		end
+	end
+
+	return out
+end
+
+--- Theme file -> scheme table, plus how many keys survived. Unknown keys and
+--- unparseable hex are dropped rather than errored on, so a hand-edited or
+--- older file still contributes whatever it got right. A flat key -> hex map is
+--- accepted too, because that is the shape someone writing one by hand reaches
+--- for.
+function ThemeManager:DecodeScheme(data)
+	local Library = self.Library
+	local scheme, count = {}, 0
+
+	if not Library or type(data) ~= "table" then
+		return scheme, count
+	end
+
+	local colors = type(data.colors) == "table" and data.colors or data
+
+	for key, hex in colors do
+		-- GetColor resolves the Linoria aliases too, so AccentColor lands on
+		-- Accent instead of being thrown away.
+		if type(key) == "string" and Library:GetColor(key) ~= nil then
+			local color = Util.FromHex(hex)
+			if color then
+				scheme[key] = color
+				count += 1
+			end
+		end
+	end
+
+	return scheme, count
+end
+
+function ThemeManager:CustomThemeList()
+	local list = {}
+
+	for _, path in Util.FS.List(self:ThemesFolder()) do
+		if type(path) == "string" and path:sub(-5) == ".json" then
+			local stem = Util.FS.Stem(path, ".json")
+			-- default.json is the startup pointer, not a theme.
+			if stem ~= "" and stem:lower() ~= DEFAULT_STEM then
+				table.insert(list, stem)
+			end
+		end
+	end
+
+	table.sort(list)
+	return list
+end
+
+function ThemeManager:RefreshCustomThemeList()
+	local list = self:CustomThemeList()
+
+	local dropdown = self.Objects.CustomList
+	if dropdown and dropdown.SetValues then
+		dropdown:SetValues(list)
+	end
+
+	return list
+end
+
+--- Whatever the saved-theme dropdown is pointing at, or nil.
+function ThemeManager:SelectedCustom()
+	local dropdown = self.Objects.CustomList
+	local value = dropdown and dropdown.Value
+
+	if type(value) == "string" and value ~= "" then
+		return value
+	end
+
+	return nil
+end
+
+--- Moves that dropdown onto `name` silently, so a programmatic load cannot
+--- recurse back into :LoadCustomTheme through the dropdown's own callback.
+function ThemeManager:SelectCustom(name)
+	local dropdown = self.Objects.CustomList
+
+	if dropdown and dropdown.SetValue and dropdown.Value ~= name then
+		dropdown:SetValue(name, true)
+	end
+
+	return self
+end
+
+--- The load path :LoadCustomTheme and :LoadDefault share. Returns false plus a
+--- reason instead of notifying, so the caller decides whether that reason is
+--- worth a notification -- restoring the startup theme quietly is not.
+function ThemeManager:ApplyCustomTheme(clean)
+	local Library = self.Library
+
+	if not Library or type(clean) ~= "string" then
+		return false, "Theme manager is not attached"
+	end
+
+	local data = Util.FS.ReadJSON(self:ThemePath(clean))
+	if type(data) ~= "table" then
+		return false, ("%s could not be read"):format(clean)
+	end
+
+	local scheme, count = self:DecodeScheme(data)
+	if count == 0 then
+		return false, ("%s holds no colours"):format(clean)
+	end
+
+	-- A saved theme is a whole scheme, so per-key overrides are done with.
+	self.CustomTheme = clean
+	table.clear(self.Custom)
+
+	Library:SetScheme(scheme)
+	self:SelectCustom(clean)
+	self:Sync()
+
+	return true
+end
+
+--- Writes the CURRENT scheme -- presets, per-key edits and all -- under `name`.
+function ThemeManager:SaveCustomTheme(name)
+	local Library = self.Library
+
+	local clean = self:Sanitize(name)
+	if not clean then
+		notify(Library, "Enter a valid theme name", "risk")
+		return false
+	end
+
+	if not Library then
+		return false
+	end
+
+	if not Util.FS.Available() then
+		notify(Library, "Filesystem unavailable", "risk")
+		return false
+	end
+
+	self:BuildFolders()
+
+	local written = Util.FS.WriteJSON(self:ThemePath(clean), {
+		name = clean,
+		version = 1,
+		colors = self:SchemeHex(),
+	})
+
+	if not written then
+		notify(Library, ("Could not write %s"):format(clean), "risk")
+		return false
+	end
+
+	-- What is on screen is now exactly this file.
+	self.CustomTheme = clean
+	self:RefreshCustomThemeList()
+	self:SelectCustom(clean)
+
+	notify(Library, ("Saved theme %s"):format(clean), "good")
+
+	return true
+end
+
+function ThemeManager:LoadCustomTheme(name)
+	local Library = self.Library
+
+	local clean = self:Sanitize(name)
+	if not clean then
+		notify(Library, "Select a theme first", "risk")
+		return false
+	end
+
+	if not Util.FS.Available() then
+		notify(Library, "Filesystem unavailable", "risk")
+		return false
+	end
+
+	local ok, reason = self:ApplyCustomTheme(clean)
+	if not ok then
+		notify(Library, reason or ("%s could not be read"):format(clean), "risk")
+		return false
+	end
+
+	notify(Library, ("Loaded theme %s"):format(clean), "good")
+
+	return true
+end
+
+function ThemeManager:DeleteCustomTheme(name)
+	local Library = self.Library
+
+	local clean = self:Sanitize(name)
+	if not clean then
+		notify(Library, "Select a theme first", "risk")
+		return false
+	end
+
+	if not Util.FS.Available() then
+		notify(Library, "Filesystem unavailable", "risk")
+		return false
+	end
+
+	local path = self:ThemePath(clean)
+	if not Util.FS.IsFile(path) then
+		notify(Library, ("%s does not exist"):format(clean), "risk")
+		return false
+	end
+
+	if not Util.FS.Delete(path) then
+		notify(Library, ("Could not delete %s"):format(clean), "risk")
+		return false
+	end
+
+	-- The colours stay on screen; there is simply no file behind them any more,
+	-- so :SetDefault must stop offering to write this name.
+	if self.CustomTheme == clean then
+		self.CustomTheme = nil
+	end
+
+	self:RefreshCustomThemeList()
+	notify(Library, ("Deleted %s"):format(clean), "good")
+
+	return true
 end
 
 --==============================================================
@@ -3838,9 +4288,11 @@ function ThemeManager:ApplyToGroupbox(groupbox)
 	local setDefault = groupbox:AddButton({
 		Text = "Set as default",
 		Tooltip = "Apply this theme automatically on load",
+		-- No argument: :SetDefault picks whatever is actually on screen, which
+		-- may be a saved theme rather than one of the presets.
 		Func = function()
-			if self:SetDefault(self.Theme) then
-				notify(Library, ("%s saved as default"):format(self.Theme), "good")
+			if self:SetDefault() then
+				notify(Library, ("%s saved as default"):format(self.CustomTheme or self.Theme), "good")
 			else
 				notify(Library, "Filesystem unavailable", "risk")
 			end
@@ -3867,11 +4319,124 @@ function ThemeManager:ApplyToGroupbox(groupbox)
 	return groupbox
 end
 
+--- Name box, saved-theme list and the file commands. Split out of
+--- :ApplyToGroupbox so a script laying the tab out by hand can place the two
+--- halves of the editor wherever it likes.
+function ThemeManager:BuildCustomThemeSection(groupbox)
+	local Library = self.Library
+
+	if not Library then
+		warn("[Sable] ThemeManager:BuildCustomThemeSection called before :SetLibrary")
+		return groupbox
+	end
+	if type(groupbox) ~= "table" or not groupbox.AddInput then
+		warn("[Sable] ThemeManager:BuildCustomThemeSection needs a groupbox")
+		return groupbox
+	end
+
+	self:BuildFolders()
+
+	self.Building = true
+
+	local nameInput = groupbox:AddInput(self.CustomNameIndex, {
+		Text = "Theme name",
+		Placeholder = "name",
+		MaxLength = 40,
+		Tooltip = "Used by CREATE",
+	})
+	self.Objects.CustomName = nameInput
+
+	self.Objects.CustomList = groupbox:AddDropdown(self.CustomListIndex, {
+		Text = "Saved themes",
+		Values = self:CustomThemeList(),
+		-- Starts on whatever :LoadDefault already restored, and on NONE
+		-- otherwise: pre-selecting a file nobody applied would read as if that
+		-- theme were the live one.
+		Default = self.CustomTheme,
+		AllowNull = true,
+		Tooltip = "Themes on disk; picking one loads it",
+		Callback = function(value)
+			-- AllowNull hands back nil when the selection is cleared, which is
+			-- not a request to load anything.
+			if self.Building or type(value) ~= "string" or value == "" then
+				return
+			end
+			self:LoadCustomTheme(value)
+		end,
+	})
+
+	self.Building = false
+
+	--- CREATE writes the typed name; everything else works on the list
+	--- selection and falls back to the typed name, matching the config section.
+	local function target()
+		return self:SelectedCustom() or (nameInput and nameInput.Value)
+	end
+
+	local create = groupbox:AddButton({
+		Text = "Create",
+		Tooltip = "Save the colours on screen under the typed name",
+		Func = function()
+			self:SaveCustomTheme(nameInput and nameInput.Value)
+		end,
+	})
+
+	if create and create.AddButton then
+		create:AddButton({
+			Text = "Overwrite",
+			Tooltip = "Save the colours on screen over the selected theme",
+			Func = function()
+				self:SaveCustomTheme(target())
+			end,
+		})
+	end
+
+	local load = groupbox:AddButton({
+		Text = "Load",
+		Tooltip = "Apply the selected theme",
+		Func = function()
+			self:LoadCustomTheme(target())
+		end,
+	})
+
+	if load and load.AddButton then
+		load:AddButton({
+			Text = "Delete",
+			DoubleClick = true,
+			Tooltip = "Double click to delete the selected theme",
+			Func = function()
+				self:DeleteCustomTheme(target())
+			end,
+		})
+	end
+
+	groupbox:AddButton({
+		Text = "Refresh",
+		Tooltip = "Re-read the themes folder",
+		Func = function()
+			local list = self:RefreshCustomThemeList()
+			notify(Library, ("%d theme(s) on disk"):format(#list))
+		end,
+	})
+
+	return groupbox
+end
+
 function ThemeManager:ApplyToTab(tab)
 	if type(tab) == "table" and tab.AddLeftGroupbox then
-		return self:ApplyToGroupbox(tab:AddLeftGroupbox("Theme"))
+		local groupbox = self:ApplyToGroupbox(tab:AddLeftGroupbox("Theme"))
+		self:BuildCustomThemeSection(tab:AddLeftGroupbox("Custom themes"))
+		return groupbox
 	end
-	return self:ApplyToGroupbox(tab)
+
+	-- Handed a bare groupbox: there is nowhere to put a second box, so the
+	-- saved-theme controls continue inside the one we were given.
+	local groupbox = self:ApplyToGroupbox(tab)
+	if type(groupbox) == "table" and groupbox.AddInput then
+		self:BuildCustomThemeSection(groupbox)
+	end
+
+	return groupbox
 end
 
 return ThemeManager
@@ -4422,18 +4987,11 @@ local ColorPicker = {}
 -- geometry
 --==============================================================
 
-local PAD = 8
-local GAP = 6
-local SV_SIZE = 132
-local BAR_WIDTH = 12
-local ALPHA_HEIGHT = 10
-local FIELD_HEIGHT = 18
-local COPY_WIDTH = 44
-local TITLE_HEIGHT = 12
+-- The SV crosshair is sized against the surface it sits ON, not against the
+-- design grid: it has to stay small enough that the colour underneath it is
+-- still readable however large the canvas gets. A layout metric here would make
+-- the marker swallow the thing it is pointing at.
 local CURSOR_SIZE = 7
-
-local CONTENT_WIDTH = SV_SIZE + GAP + BAR_WIDTH
-local POPUP_WIDTH = CONTENT_WIDTH + PAD * 2
 
 -- Pure white and pure black are not theming here, they are the arithmetic of
 -- the HSV square: saturation fades toward white, value fades toward black. A
@@ -4442,6 +5000,8 @@ local POPUP_WIDTH = CONTENT_WIDTH + PAD * 2
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
 
+-- Six equal steps around the hue wheel. A property of the colour space, not a
+-- layout choice, so it does not scale with anything.
 local hueStops = table.create(7)
 for step = 0, 6 do
 	local alpha = step / 6
@@ -4459,6 +5019,39 @@ local FADE_IN = NumberSequence.new({
 	NumberSequenceKeypoint.new(0, 1),
 	NumberSequenceKeypoint.new(1, 0),
 })
+
+--- Every popup dimension, derived from the design system. Built per element
+--- rather than once at module scope because the copy button is measured from
+--- live text metrics, which need the Library's fonts.
+local function geometry(Library)
+	local sizes = Library.Sizes
+
+	-- Half a group pad is the library's internal gap unit; Window.lua splits
+	-- ColumnGap and GroupPad the same way.
+	local gap = math.ceil(sizes.GroupPad / 2)
+	local copyText = Library:FormatLabel("Copy")
+
+	local geo = {
+		Pad = sizes.GroupPad,
+		Gap = gap,
+		-- Hue and alpha bars are one control square thick, so they carry the
+		-- same visual weight as the swatch that opened the popup.
+		Bar = sizes.Control,
+		Square = sizes.PickerSquare,
+		-- The popup's caption band is a group header by another name.
+		TitleHeight = sizes.GroupHeader,
+		-- The hex field and its copy button are a row of the popup.
+		FieldHeight = sizes.RowHeight,
+		CopyText = copyText,
+		CopyWidth = math.ceil(Util.TextSize(copyText, sizes.TextSmall, Library.Fonts.Label).X)
+			+ sizes.GroupPad * 2,
+	}
+
+	geo.Content = geo.Square + geo.Gap + geo.Bar
+	geo.Width = geo.Content + geo.Pad * 2
+
+	return geo
+end
 
 --==============================================================
 -- helpers
@@ -4513,6 +5106,7 @@ local function build(Library, container, host, index, options)
 
 	local sizes = Library.Sizes
 	local control = sizes.Control
+	local geo = geometry(Library)
 
 	local default = typeof(options.Default) == "Color3" and options.Default or Library:GetColor("Accent")
 	local hue, saturation, value = default:ToHSV()
@@ -4557,7 +5151,7 @@ local function build(Library, container, host, index, options)
 		element.Label = Library:Label({
 			Name = "Label",
 			Text = Library:FormatLabel(element.Text),
-			Size = UDim2.new(1, -(control + GAP), 1, 0),
+			Size = UDim2.new(1, -(control + geo.Gap), 1, 0),
 			Parent = row,
 		}, element.Risky and "Risk" or "Font")
 	end
@@ -4594,9 +5188,9 @@ local function build(Library, container, host, index, options)
 	local dragging = nil
 
 	local function popupHeight()
-		local height = PAD + TITLE_HEIGHT + GAP + SV_SIZE + GAP + FIELD_HEIGHT + PAD
+		local height = geo.Pad + geo.TitleHeight + geo.Gap + geo.Square + geo.Gap + geo.FieldHeight + geo.Pad
 		if hasAlpha then
-			height += ALPHA_HEIGHT + GAP
+			height += geo.Bar + geo.Gap
 		end
 		return height
 	end
@@ -4666,7 +5260,7 @@ local function build(Library, container, host, index, options)
 		local frame = Library:Panel({
 			Name = "ColorPopup",
 			Visible = false,
-			Size = UDim2.fromOffset(POPUP_WIDTH, popupHeight()),
+			Size = UDim2.fromOffset(geo.Width, popupHeight()),
 			Parent = Library.PopupHolder,
 		}, "Panel", "Outline")
 		popupFrame = frame
@@ -4677,12 +5271,12 @@ local function build(Library, container, host, index, options)
 			Name = "Title",
 			Text = Library:Chrome(element.Title),
 			TextSize = sizes.TextSmall,
-			Position = UDim2.fromOffset(PAD, PAD),
-			Size = UDim2.new(1, -PAD * 2, 0, TITLE_HEIGHT),
+			Position = UDim2.fromOffset(geo.Pad, geo.Pad),
+			Size = UDim2.new(1, -geo.Pad * 2, 0, geo.TitleHeight),
 			Parent = frame,
 		}, "FontDim")
 
-		local cursorY = PAD + TITLE_HEIGHT + GAP
+		local cursorY = geo.Pad + geo.TitleHeight + geo.Gap
 
 		--------------------------------------------------------
 		-- saturation / value square
@@ -4692,8 +5286,10 @@ local function build(Library, container, host, index, options)
 			Name = "SV",
 			BorderSizePixel = 0,
 			BackgroundColor3 = Color3.fromHSV(element.Hue, 1, 1),
-			Position = UDim2.fromOffset(PAD, cursorY),
-			Size = UDim2.fromOffset(SV_SIZE, SV_SIZE),
+			Position = UDim2.fromOffset(geo.Pad, cursorY),
+			-- Square by construction: saturation runs one axis, value the other,
+			-- so equal edges keep both at the same sensitivity per pixel.
+			Size = UDim2.fromOffset(geo.Square, geo.Square),
 			Parent = frame,
 		})
 		Library:AddToRegistry(
@@ -4741,19 +5337,27 @@ local function build(Library, container, host, index, options)
 			ZIndex = 4,
 			Parent = svBase,
 		})
-		Library:AddToRegistry(Util.Stroke(svCursor, Library:GetColor("Black"), 1), { Color = "Black" })
+		Library:AddToRegistry(
+			Util.Stroke(svCursor, Library:GetColor("Black"), sizes.Outline),
+			{ Color = "Black" }
+		)
 
+		-- Inset by exactly one hairline on each side: the two rings have to be
+		-- adjacent, or the pair stops reading as a single marker.
 		local cursorInner = Library:Create("Frame", {
 			Name = "Inner",
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.new(1, -2, 1, -2),
+			Size = UDim2.new(1, -sizes.Outline * 2, 1, -sizes.Outline * 2),
 			ZIndex = 4,
 			Parent = svCursor,
 		})
-		Library:AddToRegistry(Util.Stroke(cursorInner, Library:GetColor("Font"), 1), { Color = "Font" })
+		Library:AddToRegistry(
+			Util.Stroke(cursorInner, Library:GetColor("Font"), sizes.Outline),
+			{ Color = "Font" }
+		)
 
 		bindTrack(Library:HitButton(svBase, { Name = "SVHit" }), "SV")
 
@@ -4767,8 +5371,8 @@ local function build(Library, container, host, index, options)
 			-- A UIGradient multiplies the fill, so the base has to be white for
 			-- the spectrum keypoints to come through unshifted.
 			BackgroundColor3 = WHITE,
-			Position = UDim2.fromOffset(PAD + SV_SIZE + GAP, cursorY),
-			Size = UDim2.fromOffset(BAR_WIDTH, SV_SIZE),
+			Position = UDim2.fromOffset(geo.Pad + geo.Square + geo.Gap, cursorY),
+			Size = UDim2.fromOffset(geo.Bar, geo.Square),
 			Parent = frame,
 		})
 		Util.Create("UIGradient", {
@@ -4782,21 +5386,26 @@ local function build(Library, container, host, index, options)
 			{ Color = "Outline" }
 		)
 
+		-- Overhangs its bar by a hairline on each side so the marker reads as a
+		-- cut across the track rather than a block sitting inside it.
 		hueMarker = Library:Create("Frame", {
 			Name = "Marker",
 			BorderSizePixel = 0,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0),
-			Size = UDim2.new(1, 2, 0, 2),
+			Size = UDim2.new(1, sizes.Outline * 2, 0, sizes.Indicator),
 			ZIndex = 2,
 			Theme = { BackgroundColor3 = "Font" },
 			Parent = hueBar,
 		})
-		Library:AddToRegistry(Util.Stroke(hueMarker, Library:GetColor("Black"), 1), { Color = "Black" })
+		Library:AddToRegistry(
+			Util.Stroke(hueMarker, Library:GetColor("Black"), sizes.Outline),
+			{ Color = "Black" }
+		)
 
 		bindTrack(Library:HitButton(hueBar, { Name = "HueHit" }), "Hue")
 
-		cursorY += SV_SIZE + GAP
+		cursorY += geo.Square + geo.Gap
 
 		--------------------------------------------------------
 		-- alpha bar
@@ -4805,8 +5414,8 @@ local function build(Library, container, host, index, options)
 		if hasAlpha then
 			alphaBase = Library:Panel({
 				Name = "Alpha",
-				Position = UDim2.fromOffset(PAD, cursorY),
-				Size = UDim2.fromOffset(CONTENT_WIDTH, ALPHA_HEIGHT),
+				Position = UDim2.fromOffset(geo.Pad, cursorY),
+				Size = UDim2.fromOffset(geo.Content, geo.Bar),
 				Parent = frame,
 			}, "PanelSunken", "Outline")
 
@@ -4824,33 +5433,37 @@ local function build(Library, container, host, index, options)
 				Parent = alphaFill,
 			})
 
+			-- Same construction as the hue marker, rotated: a cut across the bar.
 			alphaMarker = Library:Create("Frame", {
 				Name = "Marker",
 				BorderSizePixel = 0,
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0, 0.5),
-				Size = UDim2.new(0, 2, 1, 2),
+				Size = UDim2.new(0, sizes.Indicator, 1, sizes.Outline * 2),
 				ZIndex = 3,
 				Theme = { BackgroundColor3 = "Font" },
 				Parent = alphaBase,
 			})
-			Library:AddToRegistry(Util.Stroke(alphaMarker, Library:GetColor("Black"), 1), { Color = "Black" })
+			Library:AddToRegistry(
+				Util.Stroke(alphaMarker, Library:GetColor("Black"), sizes.Outline),
+				{ Color = "Black" }
+			)
 
 			bindTrack(Library:HitButton(alphaBase, { Name = "AlphaHit" }), "Alpha")
 
-			cursorY += ALPHA_HEIGHT + GAP
+			cursorY += geo.Bar + geo.Gap
 		end
 
 		--------------------------------------------------------
 		-- hex field + copy
 		--------------------------------------------------------
 
-		local fieldWidth = CONTENT_WIDTH - COPY_WIDTH - GAP
+		local fieldWidth = geo.Content - geo.CopyWidth - geo.Gap
 
 		local field = Library:Panel({
 			Name = "Hex",
-			Position = UDim2.fromOffset(PAD, cursorY),
-			Size = UDim2.fromOffset(fieldWidth, FIELD_HEIGHT),
+			Position = UDim2.fromOffset(geo.Pad, cursorY),
+			Size = UDim2.fromOffset(fieldWidth, geo.FieldHeight),
 			Parent = frame,
 		}, "PanelSunken", "Outline")
 
@@ -4884,14 +5497,14 @@ local function build(Library, container, host, index, options)
 
 		local copy = Library:Panel({
 			Name = "Copy",
-			Position = UDim2.fromOffset(PAD + fieldWidth + GAP, cursorY),
-			Size = UDim2.fromOffset(COPY_WIDTH, FIELD_HEIGHT),
+			Position = UDim2.fromOffset(geo.Pad + fieldWidth + geo.Gap, cursorY),
+			Size = UDim2.fromOffset(geo.CopyWidth, geo.FieldHeight),
 			Parent = frame,
 		}, "Panel", "Outline")
 
 		Library:Label({
 			Name = "Text",
-			Text = Library:FormatLabel("Copy"),
+			Text = geo.CopyText,
 			TextSize = sizes.TextSmall,
 			TextXAlignment = Enum.TextXAlignment.Center,
 			Size = UDim2.fromScale(1, 1),
@@ -4986,9 +5599,9 @@ local function build(Library, container, host, index, options)
 		self:Display()
 
 		popupHandle = Library:OpenPopup(frame, swatch, {
-			Width = POPUP_WIDTH,
+			Width = geo.Width,
 			Height = popupHeight(),
-			Gap = 4,
+			Gap = sizes.RowGap,
 			OnClose = function()
 				dragging = nil
 			end,
@@ -5154,8 +5767,6 @@ local Base = require("elements/Base")
 
 local Dropdown = {}
 
-local SEARCH_HEIGHT = 20
-local MIN_POPUP_WIDTH = 132
 local PLACEHOLDER = "NONE"
 
 -- Plain text, never an image asset -- the library is text and rectangles only.
@@ -5194,13 +5805,22 @@ function Dropdown.New(Library, container, index, options)
 
 	local element = Base.Create(Library, container, "Dropdown", index, options)
 
+	local Sizes = Library.Sizes
+	-- Half a group pad is the library's inner gap unit; Window.lua splits
+	-- ColumnGap and GroupPad the same way.
+	local padX = math.ceil(Sizes.GroupPad / 2)
+	-- The filter field is a row of the popup, exactly like the items below it.
+	local searchHeight = Sizes.RowHeight
+	-- One glyph of the readout face is all the caret needs; it is drawn as text.
+	local caretWidth = Sizes.TextSmall
+
 	element.Values = toStringList(options.Values)
 	element.Multi = options.Multi == true
 	element.AllowNull = options.AllowNull == true
 	element.Searchable = options.Searchable == true
 	element.MaxVisible = math.max(
 		1,
-		math.floor(tonumber(options.MaxVisibleDropdownItems) or Library.Sizes.PopupMaxItems)
+		math.floor(tonumber(options.MaxVisibleDropdownItems) or Sizes.PopupMaxItems)
 	)
 
 	element.Rows = {}
@@ -5215,9 +5835,11 @@ function Dropdown.New(Library, container, index, options)
 	element.Row = row
 	element.ExpandedSize = row.Size
 
+	-- Label and value button split the row down the middle, with a half pad of
+	-- air between them.
 	element.Label = Library:Label({
 		Name = "Label",
-		Size = UDim2.new(0.5, -6, 1, 0),
+		Size = UDim2.new(0.5, -padX, 1, 0),
 		Text = Library:FormatLabel(element.Text),
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Parent = row,
@@ -5227,7 +5849,7 @@ function Dropdown.New(Library, container, index, options)
 		Name = "Value",
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
-		Size = UDim2.new(0.5, 0, 1, -2),
+		Size = UDim2.new(0.5, 0, 1, -Sizes.RowGap),
 		ClipsDescendants = true,
 		Parent = row,
 	}, "Panel", "Outline")
@@ -5238,19 +5860,21 @@ function Dropdown.New(Library, container, index, options)
 	element.Caret = Library:Label({
 		Name = "Caret",
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -4, 0.5, 0),
-		Size = UDim2.new(0, 10, 1, 0),
-		TextSize = Library.Sizes.TextSmall,
+		Position = UDim2.new(1, -Sizes.RowGap, 0.5, 0),
+		Size = UDim2.new(0, caretWidth, 1, 0),
+		TextSize = Sizes.TextSmall,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		Text = CARET_CLOSED,
 		Parent = button,
 	}, "FontDim")
 
+	-- Everything the caret occupies plus a half pad of clearance on both sides,
+	-- so a long value truncates instead of running under the arrow.
 	element.ValueLabel = Library:Label({
 		Name = "Text",
-		Position = UDim2.fromOffset(6, 0),
-		Size = UDim2.new(1, -22, 1, 0),
-		TextSize = Library.Sizes.TextSmall,
+		Position = UDim2.fromOffset(padX, 0),
+		Size = UDim2.new(1, -(padX * 2 + caretWidth + Sizes.RowGap), 1, 0),
+		TextSize = Sizes.TextSmall,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Text = PLACEHOLDER,
 		Parent = button,
@@ -5267,7 +5891,7 @@ function Dropdown.New(Library, container, index, options)
 		Name = "DropdownPopup",
 		Visible = false,
 		ClipsDescendants = true,
-		Size = UDim2.fromOffset(MIN_POPUP_WIDTH, Library.Sizes.RowHeight),
+		Size = UDim2.fromOffset(Sizes.PopupMinWidth, Sizes.RowHeight),
 		Parent = Library.PopupHolder,
 	}, "Panel", "Outline")
 
@@ -5278,7 +5902,7 @@ function Dropdown.New(Library, container, index, options)
 	if element.Searchable then
 		local search = Library:Panel({
 			Name = "Search",
-			Size = UDim2.new(1, 0, 0, SEARCH_HEIGHT),
+			Size = UDim2.new(1, 0, 0, searchHeight),
 			ClipsDescendants = true,
 			Parent = popup,
 		}, "PanelSunken", false)
@@ -5287,7 +5911,7 @@ function Dropdown.New(Library, container, index, options)
 			Name = "Rule",
 			AnchorPoint = Vector2.new(0, 1),
 			Position = UDim2.new(0, 0, 1, 0),
-			Size = UDim2.new(1, 0, 0, Library.Sizes.Outline),
+			Size = UDim2.new(1, 0, 0, Sizes.Outline),
 			BorderSizePixel = 0,
 			Theme = { BackgroundColor3 = "OutlineDim" },
 			Parent = search,
@@ -5297,10 +5921,10 @@ function Dropdown.New(Library, container, index, options)
 			Name = "Field",
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			Position = UDim2.fromOffset(6, 0),
-			Size = UDim2.new(1, -12, 1, 0),
+			Position = UDim2.fromOffset(padX, 0),
+			Size = UDim2.new(1, -padX * 2, 1, 0),
 			Font = Library.Fonts.Label,
-			TextSize = Library.Sizes.TextSmall,
+			TextSize = Sizes.TextSmall,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextYAlignment = Enum.TextYAlignment.Center,
 			Text = "",
@@ -5311,7 +5935,7 @@ function Dropdown.New(Library, container, index, options)
 			Parent = search,
 		})
 
-		listOffset = SEARCH_HEIGHT
+		listOffset = searchHeight
 	end
 
 	element.List = Library:Create("ScrollingFrame", {
@@ -5323,7 +5947,7 @@ function Dropdown.New(Library, container, index, options)
 		CanvasSize = UDim2.new(0, 0, 0, 0),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
-		ScrollBarThickness = Library.Sizes.ScrollBar,
+		ScrollBarThickness = Sizes.ScrollBar,
 		-- Empty image: the stock scrollbar texture has rounded caps.
 		ScrollBarImage = "",
 		ScrollBarImageTransparency = 0,
@@ -5340,7 +5964,7 @@ function Dropdown.New(Library, container, index, options)
 			AutoButtonColor = false,
 			BorderSizePixel = 0,
 			Text = "",
-			Size = UDim2.new(1, 0, 0, Library.Sizes.RowHeight),
+			Size = UDim2.new(1, 0, 0, Sizes.RowHeight),
 			LayoutOrder = position,
 			Visible = false,
 			ClipsDescendants = true,
@@ -5352,16 +5976,17 @@ function Dropdown.New(Library, container, index, options)
 			Name = "Mark",
 			BorderSizePixel = 0,
 			Visible = false,
-			Size = UDim2.new(0, Library.Sizes.Indicator, 1, 0),
+			Size = UDim2.new(0, Sizes.Indicator, 1, 0),
 			Theme = { BackgroundColor3 = "Accent" },
 			Parent = frame,
 		})
 
+		-- Text clears the selection bar, then keeps a half pad on both sides.
 		local label = Library:Label({
 			Name = "Text",
-			Position = UDim2.fromOffset(8, 0),
-			Size = UDim2.new(1, -12, 1, 0),
-			TextSize = Library.Sizes.TextSmall,
+			Position = UDim2.fromOffset(Sizes.Indicator + padX, 0),
+			Size = UDim2.new(1, -(Sizes.Indicator + padX * 2), 1, 0),
+			TextSize = Sizes.TextSmall,
 			TextTruncate = Enum.TextTruncate.AtEnd,
 			Parent = frame,
 		}, "FontDim")
@@ -5457,6 +6082,8 @@ function Dropdown.New(Library, container, index, options)
 	function element:Capacity()
 		local width = self.ValueLabel.AbsoluteSize.X
 		if width <= 0 then
+			-- Character counts, not pixels: a conservative budget for the frame
+			-- before the first layout pass has measured the button.
 			return 18
 		end
 
@@ -5650,12 +6277,12 @@ function Dropdown.New(Library, container, index, options)
 		self.List.CanvasPosition = Vector2.zero
 
 		local shown = math.max(1, math.min(#self.Values, self.MaxVisible))
-		local height = shown * Library.Sizes.RowHeight + (self.Search and SEARCH_HEIGHT or 0)
+		local height = shown * Sizes.RowHeight + (self.Search and searchHeight or 0)
 
 		Library:OpenPopup(self.Popup, self.Button, {
 			Height = height,
-			Width = math.max(self.Button.AbsoluteSize.X, MIN_POPUP_WIDTH),
-			Gap = 2,
+			Width = math.max(self.Button.AbsoluteSize.X, Sizes.PopupMinWidth),
+			Gap = Sizes.RowGap,
 			OnClose = function()
 				self:SetOpened(false)
 			end,
@@ -5724,9 +6351,9 @@ local Base = require("elements/Base")
 
 local Input = {}
 
--- Share of the row the field occupies when there is a label to sit beside.
+-- Share of the row the field occupies when there is a label to sit beside. A
+-- ratio, not a pixel: the row splits down the middle at any column width.
 local FIELD_SCALE = 0.5
-local LABEL_GAP = 6
 
 --- Accepts a leading '-' and at most one '.', so half-typed numbers ("-", ".",
 --- "-1.") stay editable while anything non-numeric is rejected outright.
@@ -5762,6 +6389,11 @@ function Input.New(Library, container, index, options)
 
 	local element = Base.Create(Library, container, "Input", index, options)
 
+	local Sizes = Library.Sizes
+	-- Half a group pad of air between the label and the field; Window.lua splits
+	-- ColumnGap and GroupPad the same way.
+	local labelGap = math.ceil(Sizes.GroupPad / 2)
+
 	local numeric = options.Numeric == true
 	local finished = options.Finished == true
 	local maxLength = nil
@@ -5790,9 +6422,9 @@ function Input.New(Library, container, index, options)
 	if hasLabel then
 		element.Label = Library:Label({
 			Name = "Label",
-			Size = UDim2.new(1 - FIELD_SCALE, -LABEL_GAP, 1, 0),
+			Size = UDim2.new(1 - FIELD_SCALE, -labelGap, 1, 0),
 			Text = Library:FormatLabel(element.Text),
-			TextSize = Library.Sizes.Text,
+			TextSize = Sizes.Text,
 			TextTruncate = Enum.TextTruncate.AtEnd,
 			Parent = row,
 		}, element.Risky and "Risk" or "Font")
@@ -5802,14 +6434,17 @@ function Input.New(Library, container, index, options)
 		Name = "Field",
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
-		Size = hasLabel and UDim2.new(FIELD_SCALE, 0, 1, -2) or UDim2.new(1, 0, 1, -2),
+		-- A row gap short of the full row, so the field's hairline is not welded
+		-- to the rows above and below it.
+		Size = hasLabel and UDim2.new(FIELD_SCALE, 0, 1, -Sizes.RowGap)
+			or UDim2.new(1, 0, 1, -Sizes.RowGap),
 		ClipsDescendants = true,
 		Parent = row,
 	}, "PanelSunken", false)
 
 	local focused = false
 
-	local stroke = Util.Stroke(field, Library:GetColor("Outline"), Library.Sizes.Outline)
+	local stroke = Util.Stroke(field, Library:GetColor("Outline"), Sizes.Outline)
 	-- Registered as a resolver rather than a flat key: a live theme switch while
 	-- the field is focused must repaint to the new Accent, not to Outline.
 	Library:AddToRegistry(stroke, {
@@ -5824,7 +6459,7 @@ function Input.New(Library, container, index, options)
 		BorderSizePixel = 0,
 		Size = UDim2.fromScale(1, 1),
 		Font = Library.Fonts.Value,
-		TextSize = Library.Sizes.TextSmall,
+		TextSize = Sizes.TextSmall,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Center,
 		ClearTextOnFocus = options.ClearTextOnFocus ~= false,
@@ -5834,7 +6469,7 @@ function Input.New(Library, container, index, options)
 		Parent = field,
 	})
 
-	Util.Padding(box, 0, 4, 0, 4)
+	Util.Padding(box, 0, Sizes.RowGap, 0, Sizes.RowGap)
 
 	element.Value = initial
 	element.Field = field
@@ -6043,26 +6678,38 @@ local function nextAddonOrder(right)
 	return 10 + used
 end
 
+--- Half a group pad: the library's inner gap unit. Window.lua splits ColumnGap
+--- and GroupPad the same way.
+local function halfPad(Library)
+	return math.ceil(Library.Sizes.GroupPad / 2)
+end
+
 --- The pill itself: hairline panel, monospace bind name, auto width.
 local function buildPill(Library, parent, standalone, layoutOrder)
+	local Sizes = Library.Sizes
+	local padX = halfPad(Library)
+
 	local pill, stroke = Library:Panel({
 		Name = "Bind",
 		AnchorPoint = standalone and Vector2.new(1, 0.5) or Vector2.new(0, 0),
 		Position = standalone and UDim2.new(1, 0, 0.5, 0) or UDim2.new(0, 0, 0, 0),
-		Size = UDim2.new(0, 0, 0, Library.Sizes.Control + 1),
+		-- One control square tall plus a row gap of air, so the bind text is not
+		-- jammed against the hairline. Still short enough that the pill, its
+		-- stroke and a swatch all clear a RowHeight addon slot.
+		Size = UDim2.new(0, 0, 0, Sizes.Control + Sizes.RowGap),
 		AutomaticSize = Enum.AutomaticSize.X,
 		LayoutOrder = layoutOrder or 1,
 		Parent = parent,
 	}, "Panel", "Outline")
 
-	Util.Padding(pill, 0, 5, 0, 5)
+	Util.Padding(pill, 0, padX, 0, padX)
 
 	local value = Library:Label({
 		Name = "Value",
 		Size = UDim2.new(0, 0, 1, 0),
 		AutomaticSize = Enum.AutomaticSize.X,
 		Font = Library.Fonts.Value,
-		TextSize = Library.Sizes.TextSmall,
+		TextSize = Sizes.TextSmall,
 		TextXAlignment = Enum.TextXAlignment.Center,
 		Text = "NONE",
 		Parent = pill,
@@ -6261,15 +6908,20 @@ local function install(Library, element, options, host, pill, stroke, value, hit
 	-- mode popup
 	--==========================================================
 
-	local rowHeight = Library.Sizes.RowHeight
-	local popupHeight = rowHeight * #MODES + 2
+	local Sizes = Library.Sizes
+	local padX = halfPad(Library)
+
+	local rowHeight = Sizes.RowHeight
+	-- The rows sit inside a one-hairline inset, which the popup has to carry.
+	local popupHeight = rowHeight * #MODES + Sizes.Outline * 2
 	local popupWidth = 0
 
 	for _, mode in MODES do
-		local measured = Util.TextSize(Library:FormatLabel(mode), Library.Sizes.TextSmall, Library.Fonts.Value)
+		local measured = Util.TextSize(Library:FormatLabel(mode), Sizes.TextSmall, Library.Fonts.Value)
 		popupWidth = math.max(popupWidth, measured.X)
 	end
-	popupWidth = math.ceil(popupWidth) + 16
+	-- Widest mode name, plus each row's own padding and the same hairline inset.
+	popupWidth = math.ceil(popupWidth) + padX * 2 + Sizes.Outline * 2
 
 	local function buildPopup()
 		if popupFrame then
@@ -6296,7 +6948,7 @@ local function install(Library, element, options, host, pill, stroke, value, hit
 			Parent = frame,
 		})
 
-		Util.Padding(content, 1, 1, 1, 1)
+		Util.Padding(content, Sizes.Outline, Sizes.Outline, Sizes.Outline, Sizes.Outline)
 		Util.ListLayout(content, 0)
 
 		popupRows = {}
@@ -6313,12 +6965,12 @@ local function install(Library, element, options, host, pill, stroke, value, hit
 				Name = "Text",
 				Size = UDim2.fromScale(1, 1),
 				Font = Library.Fonts.Value,
-				TextSize = Library.Sizes.TextSmall,
+				TextSize = Sizes.TextSmall,
 				Text = Library:FormatLabel(mode),
 				Parent = rowFrame,
 			}, "FontDim")
 
-			Util.Padding(rowLabel, 0, 6, 0, 6)
+			Util.Padding(rowLabel, 0, padX, 0, padX)
 
 			local rowHit = Library:HitButton(rowFrame, { Name = "Hit" })
 			Library:BindHover(rowHit, rowFrame, "Panel", "PanelRaised")
@@ -6575,8 +7227,10 @@ function KeyPicker.New(Library, container, index, options)
 
 	-- The pill's width is only known once AutomaticSize has run, so the label
 	-- reserves its space reactively instead of guessing.
+	local labelGap = halfPad(Library)
+
 	Library:GiveSignal(pill:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
-		label.Size = UDim2.new(1, -(pill.AbsoluteSize.X + 6), 1, 0)
+		label.Size = UDim2.new(1, -(pill.AbsoluteSize.X + labelGap), 1, 0)
 	end))
 
 	install(Library, element, options, nil, pill, stroke, value, hit)
@@ -6619,9 +7273,6 @@ local Base = require("elements/Base")
 
 local Label = {}
 
---- Space kept between the caption and whatever sits in the addon slot.
-local ADDON_GAP = 4
-
 function Label.New(Library, container, text, doesWrap)
 	local wraps = doesWrap == true
 
@@ -6629,9 +7280,17 @@ function Label.New(Library, container, text, doesWrap)
 		Text = text ~= nil and tostring(text) or "",
 	})
 
+	local Sizes = Library.Sizes
+	--- Space kept between the caption and whatever sits in the addon slot; the
+	--- same gap the slot's own list layout uses between two addons.
+	local addonGap = Sizes.RowGap
+
 	-- A wrapping label cannot know its height until the text has been laid out
-	-- against the real column width, so the row measures itself instead.
-	local row = Library:Row(container, wraps and 0 or Library.Sizes.RowHeight)
+	-- against the real column width, so the row measures itself instead. The
+	-- declared height stays RowHeight either way: AutomaticSize treats it as a
+	-- floor, which is what keeps a one-line wrapped caption from collapsing
+	-- shorter than the addon pill docked beside it.
+	local row = Library:Row(container, Sizes.RowHeight)
 	row.Name = "LabelRow"
 	if wraps then
 		row.AutomaticSize = Enum.AutomaticSize.Y
@@ -6647,7 +7306,7 @@ function Label.New(Library, container, text, doesWrap)
 		AutomaticSize = wraps and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
 		TextWrapped = wraps,
 		TextYAlignment = wraps and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
-		TextSize = Library.Sizes.Text,
+		TextSize = Sizes.Text,
 		Text = Library:FormatLabel(element.Text),
 		Parent = row,
 	}, "FontDim")
@@ -6671,7 +7330,7 @@ function Label.New(Library, container, text, doesWrap)
 		HorizontalAlignment = Enum.HorizontalAlignment.Right,
 		VerticalAlignment = Enum.VerticalAlignment.Center,
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, ADDON_GAP),
+		Padding = UDim.new(0, addonGap),
 		Parent = element.Right,
 	})
 
@@ -6680,7 +7339,7 @@ function Label.New(Library, container, text, doesWrap)
 	local function reserve()
 		local used = element.Right.AbsoluteSize.X
 		if used > 0 then
-			used += ADDON_GAP
+			used += addonGap
 		end
 		caption.Size = UDim2.new(1, -used, wraps and 0 or 1, 0)
 	end
@@ -6735,9 +7394,11 @@ local Base = require("elements/Base")
 
 local Slider = {}
 
-local GAP = 6 -- label <-> track <-> readout
-local CELL_GAP = 1 -- gutter between cells
-local LABEL_MAX = 120 -- a long label must never eat the whole row
+-- Share of the row a label may claim before it starts squeezing the track. A
+-- ratio, not a pixel: the row width is layout-driven and changes when the window
+-- is resized, so a fixed cap would be wrong at every size but one.
+local LABEL_SHARE = 0.45
+
 local SEGMENT_MAX = 64
 local ROUNDING_MAX = 6
 
@@ -6746,13 +7407,21 @@ function Slider.New(Library, container, index, options)
 
 	local element = Base.Create(Library, container, "Slider", index, options)
 
+	local Sizes = Library.Sizes
+	-- label <-> track <-> readout. Half a group pad is the library's inner gap
+	-- unit; Window.lua splits ColumnGap and GroupPad the same way.
+	local gap = math.ceil(Sizes.GroupPad / 2)
+	-- One hairline of gutter between cells, so the segmentation reads as cuts in
+	-- a bar rather than as separate blocks.
+	local cellGap = Sizes.Outline
+
 	element.Min = tonumber(options.Min) or 0
 	element.Max = tonumber(options.Max) or 100
 	element.Rounding = math.floor(Util.Clamp(tonumber(options.Rounding) or 0, 0, ROUNDING_MAX))
 	element.Suffix = tostring(options.Suffix or "")
 	element.Compact = options.Compact == true
 	element.Segments =
-		math.floor(Util.Clamp(tonumber(options.Segments) or Library.Sizes.Segments, 1, SEGMENT_MAX))
+		math.floor(Util.Clamp(tonumber(options.Segments) or Sizes.Segments, 1, SEGMENT_MAX))
 	element.Value = element.Min
 
 	--==============================================================
@@ -6794,7 +7463,7 @@ function Slider.New(Library, container, index, options)
 		Position = UDim2.new(1, 0, 0.5, 0),
 		Size = UDim2.new(0, 0, 1, 0),
 		Font = Library.Fonts.Value,
-		TextSize = Library.Sizes.TextSmall,
+		TextSize = Sizes.TextSmall,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		TextYAlignment = Enum.TextYAlignment.Center,
 		Text = "",
@@ -6810,7 +7479,7 @@ function Slider.New(Library, container, index, options)
 		Name = "Track",
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 0, 0.5, 0),
-		Size = UDim2.new(1, 0, 0, Library.Sizes.Track),
+		Size = UDim2.new(1, 0, 0, Sizes.Track),
 		Parent = row,
 	}, "PanelSunken", "Outline")
 
@@ -6825,8 +7494,8 @@ function Slider.New(Library, container, index, options)
 	})
 
 	-- No right padding: the trailing cell's own gutter supplies it, so the
-	-- inset reads as 1px on both ends.
-	Util.Padding(cells, 1, 0, 1, 1)
+	-- inset reads as one hairline on both ends.
+	Util.Padding(cells, Sizes.Outline, 0, Sizes.Outline, Sizes.Outline)
 
 	Library:Create("UIListLayout", {
 		Name = "List",
@@ -6834,7 +7503,7 @@ function Slider.New(Library, container, index, options)
 		HorizontalAlignment = Enum.HorizontalAlignment.Left,
 		VerticalAlignment = Enum.VerticalAlignment.Center,
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, CELL_GAP),
+		Padding = UDim.new(0, cellGap),
 		Parent = cells,
 	})
 
@@ -6849,7 +7518,7 @@ function Slider.New(Library, container, index, options)
 		record.Frame = Library:Create("Frame", {
 			Name = ("Cell%02d"):format(cellIndex),
 			BorderSizePixel = 0,
-			Size = UDim2.new(cellWidth, -CELL_GAP, 1, 0),
+			Size = UDim2.new(cellWidth, -cellGap, 1, 0),
 			LayoutOrder = cellIndex,
 			Theme = {
 				BackgroundColor3 = function()
@@ -6862,12 +7531,14 @@ function Slider.New(Library, container, index, options)
 		segments[cellIndex] = record
 	end
 
-	-- Taller and wider than the 8px trough: an 8px grab target is a nuisance.
+	-- Taller and wider than the trough: a Track-tall grab target is a nuisance,
+	-- so the hit area is grown out to the full row height plus a gap of overhang
+	-- on either side.
 	local hit = Library:HitButton(trough, {
 		Name = "Hit",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.new(1, 4, 1, 10),
+		Size = UDim2.new(1, Sizes.RowGap, 1, math.max(0, Sizes.RowHeight - Sizes.Track)),
 	})
 	element.Hit = hit
 
@@ -6920,24 +7591,31 @@ function Slider.New(Library, container, index, options)
 	local function relayout()
 		local low, high = bounds()
 		local readoutWidth = math.max(
-			measure(formatValue(low) .. element.Suffix, Library.Sizes.TextSmall, Library.Fonts.Value),
-			measure(formatValue(high) .. element.Suffix, Library.Sizes.TextSmall, Library.Fonts.Value)
-		) + 2
+			measure(formatValue(low) .. element.Suffix, Sizes.TextSmall, Library.Fonts.Value),
+			measure(formatValue(high) .. element.Suffix, Sizes.TextSmall, Library.Fonts.Value)
+		) + Sizes.Outline * 2
 
 		readout.Size = UDim2.new(0, readoutWidth, 1, 0)
 
 		local labelWidth = 0
 		if not element.Compact then
-			labelWidth =
-				math.min(measure(label.Text, Library.Sizes.Text, Library.Fonts.Label) + 1, LABEL_MAX)
+			labelWidth = measure(label.Text, Sizes.Text, Library.Fonts.Label) + Sizes.Outline
+
+			-- Capped against the LIVE row, not a fixed pixel budget, so the same
+			-- cap holds after the window is resized. Before the first layout pass
+			-- the row has no width yet and the measured label stands.
+			local available = row.AbsoluteSize.X
+			if available > 0 then
+				labelWidth = math.min(labelWidth, math.floor(available * LABEL_SHARE))
+			end
 		end
 
 		label.Visible = not element.Compact
 		label.Size = UDim2.new(0, labelWidth, 1, 0)
 
-		local left = labelWidth > 0 and labelWidth + GAP or 0
+		local left = labelWidth > 0 and labelWidth + gap or 0
 		trough.Position = UDim2.new(0, left, 0.5, 0)
-		trough.Size = UDim2.new(1, -(left + GAP + readoutWidth), 0, Library.Sizes.Track)
+		trough.Size = UDim2.new(1, -(left + gap + readoutWidth), 0, Sizes.Track)
 	end
 
 	local function paintReadout(animate)
@@ -7094,6 +7772,15 @@ function Slider.New(Library, container, index, options)
 	-- init
 	--==============================================================
 
+	-- The label cap is a share of the row, and the row is layout-driven, so the
+	-- columns have to be re-measured whenever the window changes width.
+	Library:GiveSignal(row:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if Library.Unloaded then
+			return
+		end
+		relayout()
+	end))
+
 	relayout()
 	element:SetValue(options.Default, true)
 
@@ -7122,13 +7809,18 @@ function Toggle.New(Library, container, index, options)
 	local element = Base.Create(Library, container, "Toggle", index, options)
 	element.Value = options.Default and true or false
 
+	local Sizes = Library.Sizes
+
 	local row = Library:Row(container)
 	element.Row = row
 	element.ExpandedSize = row.Size
 
-	-- Inner mark is derived from the control metric so the box keeps its
-	-- 3px inset if Sizes.Control is ever retuned.
-	local mark = math.max(3, Library.Sizes.Control - 6)
+	-- The mark is a fraction of the box it sits in -- a ratio, not a pixel --
+	-- so the inset stays proportional at any Sizes.Control.
+	local mark = math.max(3, math.floor(Sizes.Control * 0.6))
+	-- Half a group pad of air between the label and the addon slot; Window.lua
+	-- splits ColumnGap and GroupPad the same way.
+	local labelGap = math.ceil(Sizes.GroupPad / 2)
 	local hovering = false
 
 	--==============================================================
@@ -7175,7 +7867,7 @@ function Toggle.New(Library, container, index, options)
 
 	element.Label = Library:Label({
 		Name = "Label",
-		Size = UDim2.new(1, -(Library.Sizes.Control + 6), 1, 0),
+		Size = UDim2.new(1, -(Sizes.Control + labelGap), 1, 0),
 		Text = Library:FormatLabel(element.Text),
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Parent = row,
@@ -7200,18 +7892,18 @@ function Toggle.New(Library, container, index, options)
 		FillDirection = Enum.FillDirection.Horizontal,
 		VerticalAlignment = Enum.VerticalAlignment.Center,
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, 4),
+		Padding = UDim.new(0, Sizes.RowGap),
 		Parent = element.Right,
 	})
 
 	local box = Library:Panel({
 		Name = "Box",
-		Size = UDim2.fromOffset(Library.Sizes.Control, Library.Sizes.Control),
+		Size = UDim2.fromOffset(Sizes.Control, Sizes.Control),
 		LayoutOrder = 100,
 		Parent = element.Right,
 	}, "PanelSunken", false)
 
-	local stroke = Util.Stroke(box, strokeColor(Library.Scheme), Library.Sizes.Outline)
+	local stroke = Util.Stroke(box, strokeColor(Library.Scheme), Sizes.Outline)
 	Library:AddToRegistry(stroke, { Color = strokeColor })
 
 	local fill = Library:Create("Frame", {
@@ -7233,7 +7925,7 @@ function Toggle.New(Library, container, index, options)
 	-- The addon slot auto-sizes, so the label has to yield width every time a
 	-- picker docks beside the box.
 	local function syncLabelWidth()
-		element.Label.Size = UDim2.new(1, -(element.Right.AbsoluteSize.X + 6), 1, 0)
+		element.Label.Size = UDim2.new(1, -(element.Right.AbsoluteSize.X + labelGap), 1, 0)
 	end
 
 	Library:GiveSignal(element.Right:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncLabelWidth))
@@ -7437,7 +8129,7 @@ local Library = {
 }
 
 Library.Name = "Sable"
-Library.Version = "1.0.0"
+Library.Version = "1.1.0"
 Library.Util = Util
 Library.Signal = Signal
 

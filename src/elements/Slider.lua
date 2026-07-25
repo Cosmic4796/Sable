@@ -11,9 +11,11 @@ local Base = require("elements/Base")
 
 local Slider = {}
 
-local GAP = 6 -- label <-> track <-> readout
-local CELL_GAP = 1 -- gutter between cells
-local LABEL_MAX = 120 -- a long label must never eat the whole row
+-- Share of the row a label may claim before it starts squeezing the track. A
+-- ratio, not a pixel: the row width is layout-driven and changes when the window
+-- is resized, so a fixed cap would be wrong at every size but one.
+local LABEL_SHARE = 0.45
+
 local SEGMENT_MAX = 64
 local ROUNDING_MAX = 6
 
@@ -22,13 +24,21 @@ function Slider.New(Library, container, index, options)
 
 	local element = Base.Create(Library, container, "Slider", index, options)
 
+	local Sizes = Library.Sizes
+	-- label <-> track <-> readout. Half a group pad is the library's inner gap
+	-- unit; Window.lua splits ColumnGap and GroupPad the same way.
+	local gap = math.ceil(Sizes.GroupPad / 2)
+	-- One hairline of gutter between cells, so the segmentation reads as cuts in
+	-- a bar rather than as separate blocks.
+	local cellGap = Sizes.Outline
+
 	element.Min = tonumber(options.Min) or 0
 	element.Max = tonumber(options.Max) or 100
 	element.Rounding = math.floor(Util.Clamp(tonumber(options.Rounding) or 0, 0, ROUNDING_MAX))
 	element.Suffix = tostring(options.Suffix or "")
 	element.Compact = options.Compact == true
 	element.Segments =
-		math.floor(Util.Clamp(tonumber(options.Segments) or Library.Sizes.Segments, 1, SEGMENT_MAX))
+		math.floor(Util.Clamp(tonumber(options.Segments) or Sizes.Segments, 1, SEGMENT_MAX))
 	element.Value = element.Min
 
 	--==============================================================
@@ -70,7 +80,7 @@ function Slider.New(Library, container, index, options)
 		Position = UDim2.new(1, 0, 0.5, 0),
 		Size = UDim2.new(0, 0, 1, 0),
 		Font = Library.Fonts.Value,
-		TextSize = Library.Sizes.TextSmall,
+		TextSize = Sizes.TextSmall,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		TextYAlignment = Enum.TextYAlignment.Center,
 		Text = "",
@@ -86,7 +96,7 @@ function Slider.New(Library, container, index, options)
 		Name = "Track",
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 0, 0.5, 0),
-		Size = UDim2.new(1, 0, 0, Library.Sizes.Track),
+		Size = UDim2.new(1, 0, 0, Sizes.Track),
 		Parent = row,
 	}, "PanelSunken", "Outline")
 
@@ -101,8 +111,8 @@ function Slider.New(Library, container, index, options)
 	})
 
 	-- No right padding: the trailing cell's own gutter supplies it, so the
-	-- inset reads as 1px on both ends.
-	Util.Padding(cells, 1, 0, 1, 1)
+	-- inset reads as one hairline on both ends.
+	Util.Padding(cells, Sizes.Outline, 0, Sizes.Outline, Sizes.Outline)
 
 	Library:Create("UIListLayout", {
 		Name = "List",
@@ -110,7 +120,7 @@ function Slider.New(Library, container, index, options)
 		HorizontalAlignment = Enum.HorizontalAlignment.Left,
 		VerticalAlignment = Enum.VerticalAlignment.Center,
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, CELL_GAP),
+		Padding = UDim.new(0, cellGap),
 		Parent = cells,
 	})
 
@@ -125,7 +135,7 @@ function Slider.New(Library, container, index, options)
 		record.Frame = Library:Create("Frame", {
 			Name = ("Cell%02d"):format(cellIndex),
 			BorderSizePixel = 0,
-			Size = UDim2.new(cellWidth, -CELL_GAP, 1, 0),
+			Size = UDim2.new(cellWidth, -cellGap, 1, 0),
 			LayoutOrder = cellIndex,
 			Theme = {
 				BackgroundColor3 = function()
@@ -138,12 +148,14 @@ function Slider.New(Library, container, index, options)
 		segments[cellIndex] = record
 	end
 
-	-- Taller and wider than the 8px trough: an 8px grab target is a nuisance.
+	-- Taller and wider than the trough: a Track-tall grab target is a nuisance,
+	-- so the hit area is grown out to the full row height plus a gap of overhang
+	-- on either side.
 	local hit = Library:HitButton(trough, {
 		Name = "Hit",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.new(1, 4, 1, 10),
+		Size = UDim2.new(1, Sizes.RowGap, 1, math.max(0, Sizes.RowHeight - Sizes.Track)),
 	})
 	element.Hit = hit
 
@@ -196,24 +208,31 @@ function Slider.New(Library, container, index, options)
 	local function relayout()
 		local low, high = bounds()
 		local readoutWidth = math.max(
-			measure(formatValue(low) .. element.Suffix, Library.Sizes.TextSmall, Library.Fonts.Value),
-			measure(formatValue(high) .. element.Suffix, Library.Sizes.TextSmall, Library.Fonts.Value)
-		) + 2
+			measure(formatValue(low) .. element.Suffix, Sizes.TextSmall, Library.Fonts.Value),
+			measure(formatValue(high) .. element.Suffix, Sizes.TextSmall, Library.Fonts.Value)
+		) + Sizes.Outline * 2
 
 		readout.Size = UDim2.new(0, readoutWidth, 1, 0)
 
 		local labelWidth = 0
 		if not element.Compact then
-			labelWidth =
-				math.min(measure(label.Text, Library.Sizes.Text, Library.Fonts.Label) + 1, LABEL_MAX)
+			labelWidth = measure(label.Text, Sizes.Text, Library.Fonts.Label) + Sizes.Outline
+
+			-- Capped against the LIVE row, not a fixed pixel budget, so the same
+			-- cap holds after the window is resized. Before the first layout pass
+			-- the row has no width yet and the measured label stands.
+			local available = row.AbsoluteSize.X
+			if available > 0 then
+				labelWidth = math.min(labelWidth, math.floor(available * LABEL_SHARE))
+			end
 		end
 
 		label.Visible = not element.Compact
 		label.Size = UDim2.new(0, labelWidth, 1, 0)
 
-		local left = labelWidth > 0 and labelWidth + GAP or 0
+		local left = labelWidth > 0 and labelWidth + gap or 0
 		trough.Position = UDim2.new(0, left, 0.5, 0)
-		trough.Size = UDim2.new(1, -(left + GAP + readoutWidth), 0, Library.Sizes.Track)
+		trough.Size = UDim2.new(1, -(left + gap + readoutWidth), 0, Sizes.Track)
 	end
 
 	local function paintReadout(animate)
@@ -369,6 +388,15 @@ function Slider.New(Library, container, index, options)
 	--==============================================================
 	-- init
 	--==============================================================
+
+	-- The label cap is a share of the row, and the row is layout-driven, so the
+	-- columns have to be re-measured whenever the window changes width.
+	Library:GiveSignal(row:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if Library.Unloaded then
+			return
+		end
+		relayout()
+	end))
 
 	relayout()
 	element:SetValue(options.Default, true)

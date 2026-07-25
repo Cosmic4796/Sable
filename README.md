@@ -5,21 +5,28 @@ original code, and a deliberate visual identity: **tactical / instrument**.
 
 Warm dark grey, one amber accent, hard 1px hairlines, zero corner radius,
 uppercase letterspaced chrome, monospace numerals, corner ticks on the window
-frame, and a segmented slider track. Dense on purpose — it reads like equipment
-firmware, not a dashboard.
+frame, and a segmented slider track. It reads like equipment firmware, not a
+dashboard.
 
 ```
-┌╴                                        ╶┐
-   S A B L E                       SYS 1.0
-└╴                                        ╶┘
-   M A I N    V I S U A L S    P L A Y E R
-   ▔▔▔▔▔▔▔
- ┌ AIMBOT ─────────┐ ┌ ESP ───────────────┐
- │ ENABLED     [▪] │ │ BOXES          [▪] │
- │ TEAM CHECK  [ ] │ │ NAMES          [ ] │
- │ FOV  ▬▬▬▬▭▭ 120 │ │ TRACERS        [▪] │
- │ BONE   HEAD   ▾ │ │ FILL   ▬▬▭▭▭    40 │
- └─────────────────┘ └────────────────────┘
+┌╴                                            ╶┐
+   S A B L E                            SYS 1.1
+└╴                                            ╶┘
+
+    M A I N      V I S U A L S      P L A Y E R
+    ▔▔▔▔▔▔▔
+
+ ┌ AIMBOT ──────────┐   ┌ ESP ────────────────┐
+ │                   │   │                     │
+ │  ENABLED    [▪]   │   │  BOXES        [▪]   │
+ │                   │   │                     │
+ │  TEAM CHECK [ ]   │   │  NAMES        [ ]   │
+ │                   │   │                     │
+ │  FOV ▬▬▬▬▭▭ 120   │   │  TRACERS      [▪]   │
+ │                   │   │                     │
+ │  BONE  HEAD   ▾   │   │  FILL ▬▬▭▭▭    40   │
+ │                   │   │                     │
+ └───────────────────┘   └─────────────────────┘
 ```
 
 ## Quick start
@@ -29,7 +36,7 @@ local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmi
 
 local Window = Library:CreateWindow({
     Title = "Sable",
-    Footer = "sys 1.0",
+    Footer = "sys 1.1",
     Center = true,
     AutoShow = true,
 })
@@ -133,20 +140,70 @@ Menu hotkey defaults to `Insert`.
 ```lua
 local ThemeManager, SaveManager = Library.ThemeManager, Library.SaveManager
 
+ThemeManager:SetFolder("Sable")
+SaveManager:SetFolder("Sable/mygame")
+
+Tabs.Settings = Window:AddSettingsTab()   -- name defaults to "Settings"
+
+ThemeManager:LoadDefault()
+SaveManager:LoadAutoloadConfig()
+```
+
+`Window:AddSettingsTab(name?)` is the recommended path. It creates the tab and
+fills it in:
+
+- a **Menu** groupbox — menu keybind (`Options.MenuKeybind`, wired to
+  `Library:SetMenuKeybind`), watermark and keybind-list toggles, and a
+  double-click **Unload** button
+- the **Theme** editor (`ThemeManager:ApplyToTab`)
+- the **Configuration** section (`SaveManager:BuildConfigSection`)
+
+and it excludes the three menu preferences plus every theme index from saved
+configs, so a config file carries game settings only. It appends to your ignore
+list rather than replacing it, and leaves a folder you already chose alone —
+call `:SetFolder` first, as above, or it defaults both managers to `"Sable"`.
+Returns the tab, so you can keep adding your own groupboxes to it.
+
+Built-in themes: **Sable** (default amber), **Ember**, **Signal**, **Ice**,
+**Void**, **Mono**. All keep the warm dark neutral base and only move the
+accent — the palette is a system, not a colour picker.
+
+### Saving your own themes
+
+The **Custom themes** groupbox writes whatever is on screen — preset plus any
+per-key edits — to a named file, and reads it back later:
+
+```lua
+ThemeManager:SaveCustomTheme("night ops")   -- <folder>/themes/night ops.json
+ThemeManager:LoadCustomTheme("night ops")
+ThemeManager:DeleteCustomTheme("night ops")
+ThemeManager:CustomThemeList()              -- { "night ops", ... }, sorted
+ThemeManager:RefreshCustomThemeList()       -- re-read the folder into the UI
+```
+
+One JSON per theme, every colour a hex string. Picking a name from the dropdown
+loads it, and `:SetDefault()` accepts a saved theme as well as a preset, so your
+own theme can be the one that comes up on load. `default` is reserved — that is
+the pointer file `:SetDefault` writes.
+
+### Wiring it by hand
+
+Only worth it if you want a different layout or a subset of the controls. The
+managers are the same objects `AddSettingsTab` drives:
+
+```lua
+local Tab = Window:AddTab("Settings")
+
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
 
 ThemeManager:SetFolder("Sable")
 SaveManager:SetFolder("Sable/mygame")
 
-SaveManager:BuildConfigSection(Tabs.Settings)
-ThemeManager:ApplyToTab(Tabs.Settings)
+SaveManager:BuildConfigSection(Tab)   -- a tab, or a groupbox you built
+ThemeManager:ApplyToTab(Tab)
 SaveManager:LoadAutoloadConfig()
 ```
-
-Built-in themes: **Sable** (default amber), **Ember**, **Signal**, **Ice**,
-**Void**, **Mono**. All keep the warm dark neutral base and only move the
-accent — the palette is a system, not a colour picker.
 
 Configs are JSON under `<folder>/settings/`, themes under `<folder>/themes/`.
 Outside an executor every filesystem call degrades to a no-op instead of

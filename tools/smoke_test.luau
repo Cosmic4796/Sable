@@ -432,6 +432,61 @@ step("live SetScheme", function()
 end)
 
 --==============================================================
+-- saved themes (custom theme round-trip)
+--==============================================================
+
+local TM = Library.ThemeManager
+
+step("theme name sanitising", function()
+	check("rejects empty name", TM:Sanitize("") == nil)
+	check("rejects the reserved default", TM:Sanitize("default") == nil)
+	check("strips path separators", TM:Sanitize("../../evil") == "evil", TM:Sanitize("../../evil"))
+	check("keeps a plain name", TM:Sanitize("night ops") == "night ops")
+end)
+
+step("apply Ember then save it as a theme", function()
+	TM:ApplyTheme("Ember")
+	Library:SetScheme("Accent", Color3.fromRGB(11, 22, 33))
+end)
+check("SaveCustomTheme returns true", TM:SaveCustomTheme("smoke-theme") == true)
+check("save refuses a nameless theme", TM:SaveCustomTheme("") == false)
+check("save refuses the reserved name", TM:SaveCustomTheme("default") == false)
+
+local customList = TM:CustomThemeList()
+check("theme appears in the list", table.find(customList, "smoke-theme") ~= nil, table.concat(customList, ", "))
+check("list excludes the default pointer", table.find(customList, "default") == nil)
+
+step("clobber the scheme", function()
+	TM:ApplyTheme("Ice")
+end)
+check("scheme was clobbered", Library.Scheme.Accent ~= Color3.fromRGB(11, 22, 33))
+
+check("LoadCustomTheme returns true", TM:LoadCustomTheme("smoke-theme") == true)
+check("saved accent restored", Library.Scheme.Accent == Color3.fromRGB(11, 22, 33), tostring(Library.Scheme.Accent))
+check("saved panel restored", Library.Scheme.Panel == Library.ThemeManager.BuiltInThemes.Ember.Panel)
+check("CustomTheme tracked", TM.CustomTheme == "smoke-theme", tostring(TM.CustomTheme))
+check("load refuses a missing theme", TM:LoadCustomTheme("no-such-theme") == false)
+
+step("custom theme survives as the startup default", function()
+	check("SetDefault accepts a saved theme", TM:SetDefault("smoke-theme") == true)
+	TM:ApplyTheme("Void")
+	check("LoadDefault restores it", TM:LoadDefault() == "smoke-theme")
+	check("default accent restored", Library.Scheme.Accent == Color3.fromRGB(11, 22, 33))
+end)
+
+check("DeleteCustomTheme returns true", TM:DeleteCustomTheme("smoke-theme") == true)
+check("delete is not repeatable", TM:DeleteCustomTheme("smoke-theme") == false)
+check("theme left the list", table.find(TM:CustomThemeList(), "smoke-theme") == nil)
+check("stale default falls back", TM:LoadDefault() == "Sable", TM.Theme)
+
+check("theme indexes are ignorable", table.find(TM.Indexes, TM.CustomListIndex) ~= nil)
+check("name index is ignorable", table.find(TM.Indexes, TM.CustomNameIndex) ~= nil)
+
+step("back to a known theme", function()
+	TM:ApplyTheme("Sable")
+end)
+
+--==============================================================
 -- config round-trip (the highest-risk path)
 --==============================================================
 
@@ -524,6 +579,78 @@ end)
 step("LoadAutoloadConfig with none set", function()
 	Library.SaveManager:LoadAutoloadConfig()
 end)
+
+--==============================================================
+-- AddSettingsTab
+--==============================================================
+
+-- Runs last: it rebuilds ThemeManager.Objects / SaveManager.Objects against a
+-- new tab, so anything above that reads those would be looking at the wrong
+-- controls afterwards.
+local settingsTab
+step("AddSettingsTab", function()
+	settingsTab = Window:AddSettingsTab()
+end)
+drain()
+
+check("settings tab returned", type(settingsTab) == "table")
+check("settings tab named", settingsTab and settingsTab.Name == "Settings", settingsTab and settingsTab.Name)
+check("settings tab registered", settingsTab and table.find(Window.Tabs, settingsTab) ~= nil)
+
+check("menu keybind registered", type(O.MenuKeybind) == "table")
+check("menu keybind default", O.MenuKeybind and O.MenuKeybind.Value == Library.MenuKeybind, O.MenuKeybind and O.MenuKeybind.Value)
+check("menu keybind mode", O.MenuKeybind and O.MenuKeybind.Mode == "Toggle")
+check("menu keybind hidden from list", O.MenuKeybind and O.MenuKeybind.NoUI == true)
+check("watermark toggle registered", type(T.SableWatermark) == "table")
+check("keybind list toggle registered", type(T.SableKeybindList) == "table")
+check("watermark toggle default", T.SableWatermark and T.SableWatermark.Value == true)
+check("keybind list toggle default", T.SableKeybindList and T.SableKeybindList.Value == true)
+
+step("menu keybind drives SetMenuKeybind", function()
+	O.MenuKeybind:SetValue("F4")
+end)
+drain()
+check("menu keybind applied", Library.MenuKeybind == "F4", Library.MenuKeybind)
+step("menu keybind restored", function()
+	O.MenuKeybind:SetValue("INS")
+end)
+drain()
+
+step("watermark toggle drives visibility", function()
+	T.SableWatermark:SetValue(false)
+end)
+drain()
+check("watermark hidden", Library.WatermarkVisible == false)
+step("watermark toggle restored", function()
+	T.SableWatermark:SetValue(true)
+end)
+drain()
+
+step("keybind list toggle drives visibility", function()
+	T.SableKeybindList:SetValue(false)
+end)
+drain()
+check("keybind list hidden", Library.KeybindsVisible == false)
+step("keybind list toggle restored", function()
+	T.SableKeybindList:SetValue(true)
+end)
+drain()
+
+local ignore = Library.SaveManager.Ignore
+check("menu keybind ignored", ignore.MenuKeybind == true)
+check("watermark ignored", ignore.SableWatermark == true)
+check("keybind list ignored", ignore.SableKeybindList == true)
+check("theme indexes ignored", ignore[Library.ThemeManager.ListIndex] == true)
+-- The whole point of appending: an ignore list the script set earlier must not
+-- be replaced by the one AddSettingsTab installs.
+check("pre-existing ignore survived", ignore.Bare == true)
+
+check("config section built", type(Library.SaveManager.Objects.List) == "table")
+check("theme section built", type(Library.ThemeManager.Objects.List) == "table")
+
+-- SetFolder was called before this, so AddSettingsTab must have left both alone.
+check("save folder untouched", Library.SaveManager.Folder == "SableSmoke/game", Library.SaveManager.Folder)
+check("theme folder untouched", Library.ThemeManager.Folder == "SableSmoke", Library.ThemeManager.Folder)
 
 --==============================================================
 -- teardown

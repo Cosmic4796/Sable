@@ -16,13 +16,18 @@ function Toggle.New(Library, container, index, options)
 	local element = Base.Create(Library, container, "Toggle", index, options)
 	element.Value = options.Default and true or false
 
+	local Sizes = Library.Sizes
+
 	local row = Library:Row(container)
 	element.Row = row
 	element.ExpandedSize = row.Size
 
-	-- Inner mark is derived from the control metric so the box keeps its
-	-- 3px inset if Sizes.Control is ever retuned.
-	local mark = math.max(3, Library.Sizes.Control - 6)
+	-- The mark is a fraction of the box it sits in -- a ratio, not a pixel --
+	-- so the inset stays proportional at any Sizes.Control.
+	local mark = math.max(3, math.floor(Sizes.Control * 0.6))
+	-- Half a group pad of air between the label and the addon slot; Window.lua
+	-- splits ColumnGap and GroupPad the same way.
+	local labelGap = math.ceil(Sizes.GroupPad / 2)
 	local hovering = false
 
 	--==============================================================
@@ -69,7 +74,7 @@ function Toggle.New(Library, container, index, options)
 
 	element.Label = Library:Label({
 		Name = "Label",
-		Size = UDim2.new(1, -(Library.Sizes.Control + 6), 1, 0),
+		Size = UDim2.new(1, -(Sizes.Control + labelGap), 1, 0),
 		Text = Library:FormatLabel(element.Text),
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Parent = row,
@@ -94,18 +99,18 @@ function Toggle.New(Library, container, index, options)
 		FillDirection = Enum.FillDirection.Horizontal,
 		VerticalAlignment = Enum.VerticalAlignment.Center,
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, 4),
+		Padding = UDim.new(0, Sizes.RowGap),
 		Parent = element.Right,
 	})
 
 	local box = Library:Panel({
 		Name = "Box",
-		Size = UDim2.fromOffset(Library.Sizes.Control, Library.Sizes.Control),
+		Size = UDim2.fromOffset(Sizes.Control, Sizes.Control),
 		LayoutOrder = 100,
 		Parent = element.Right,
 	}, "PanelSunken", false)
 
-	local stroke = Util.Stroke(box, strokeColor(Library.Scheme), Library.Sizes.Outline)
+	local stroke = Util.Stroke(box, strokeColor(Library.Scheme), Sizes.Outline)
 	Library:AddToRegistry(stroke, { Color = strokeColor })
 
 	local fill = Library:Create("Frame", {
@@ -127,7 +132,7 @@ function Toggle.New(Library, container, index, options)
 	-- The addon slot auto-sizes, so the label has to yield width every time a
 	-- picker docks beside the box.
 	local function syncLabelWidth()
-		element.Label.Size = UDim2.new(1, -(element.Right.AbsoluteSize.X + 6), 1, 0)
+		element.Label.Size = UDim2.new(1, -(element.Right.AbsoluteSize.X + labelGap), 1, 0)
 	end
 
 	Library:GiveSignal(element.Right:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncLabelWidth))

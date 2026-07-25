@@ -15,8 +15,6 @@ local Base = require("elements/Base")
 
 local Dropdown = {}
 
-local SEARCH_HEIGHT = 20
-local MIN_POPUP_WIDTH = 132
 local PLACEHOLDER = "NONE"
 
 -- Plain text, never an image asset -- the library is text and rectangles only.
@@ -55,13 +53,22 @@ function Dropdown.New(Library, container, index, options)
 
 	local element = Base.Create(Library, container, "Dropdown", index, options)
 
+	local Sizes = Library.Sizes
+	-- Half a group pad is the library's inner gap unit; Window.lua splits
+	-- ColumnGap and GroupPad the same way.
+	local padX = math.ceil(Sizes.GroupPad / 2)
+	-- The filter field is a row of the popup, exactly like the items below it.
+	local searchHeight = Sizes.RowHeight
+	-- One glyph of the readout face is all the caret needs; it is drawn as text.
+	local caretWidth = Sizes.TextSmall
+
 	element.Values = toStringList(options.Values)
 	element.Multi = options.Multi == true
 	element.AllowNull = options.AllowNull == true
 	element.Searchable = options.Searchable == true
 	element.MaxVisible = math.max(
 		1,
-		math.floor(tonumber(options.MaxVisibleDropdownItems) or Library.Sizes.PopupMaxItems)
+		math.floor(tonumber(options.MaxVisibleDropdownItems) or Sizes.PopupMaxItems)
 	)
 
 	element.Rows = {}
@@ -76,9 +83,11 @@ function Dropdown.New(Library, container, index, options)
 	element.Row = row
 	element.ExpandedSize = row.Size
 
+	-- Label and value button split the row down the middle, with a half pad of
+	-- air between them.
 	element.Label = Library:Label({
 		Name = "Label",
-		Size = UDim2.new(0.5, -6, 1, 0),
+		Size = UDim2.new(0.5, -padX, 1, 0),
 		Text = Library:FormatLabel(element.Text),
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Parent = row,
@@ -88,7 +97,7 @@ function Dropdown.New(Library, container, index, options)
 		Name = "Value",
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, 0, 0.5, 0),
-		Size = UDim2.new(0.5, 0, 1, -2),
+		Size = UDim2.new(0.5, 0, 1, -Sizes.RowGap),
 		ClipsDescendants = true,
 		Parent = row,
 	}, "Panel", "Outline")
@@ -99,19 +108,21 @@ function Dropdown.New(Library, container, index, options)
 	element.Caret = Library:Label({
 		Name = "Caret",
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -4, 0.5, 0),
-		Size = UDim2.new(0, 10, 1, 0),
-		TextSize = Library.Sizes.TextSmall,
+		Position = UDim2.new(1, -Sizes.RowGap, 0.5, 0),
+		Size = UDim2.new(0, caretWidth, 1, 0),
+		TextSize = Sizes.TextSmall,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		Text = CARET_CLOSED,
 		Parent = button,
 	}, "FontDim")
 
+	-- Everything the caret occupies plus a half pad of clearance on both sides,
+	-- so a long value truncates instead of running under the arrow.
 	element.ValueLabel = Library:Label({
 		Name = "Text",
-		Position = UDim2.fromOffset(6, 0),
-		Size = UDim2.new(1, -22, 1, 0),
-		TextSize = Library.Sizes.TextSmall,
+		Position = UDim2.fromOffset(padX, 0),
+		Size = UDim2.new(1, -(padX * 2 + caretWidth + Sizes.RowGap), 1, 0),
+		TextSize = Sizes.TextSmall,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		Text = PLACEHOLDER,
 		Parent = button,
@@ -128,7 +139,7 @@ function Dropdown.New(Library, container, index, options)
 		Name = "DropdownPopup",
 		Visible = false,
 		ClipsDescendants = true,
-		Size = UDim2.fromOffset(MIN_POPUP_WIDTH, Library.Sizes.RowHeight),
+		Size = UDim2.fromOffset(Sizes.PopupMinWidth, Sizes.RowHeight),
 		Parent = Library.PopupHolder,
 	}, "Panel", "Outline")
 
@@ -139,7 +150,7 @@ function Dropdown.New(Library, container, index, options)
 	if element.Searchable then
 		local search = Library:Panel({
 			Name = "Search",
-			Size = UDim2.new(1, 0, 0, SEARCH_HEIGHT),
+			Size = UDim2.new(1, 0, 0, searchHeight),
 			ClipsDescendants = true,
 			Parent = popup,
 		}, "PanelSunken", false)
@@ -148,7 +159,7 @@ function Dropdown.New(Library, container, index, options)
 			Name = "Rule",
 			AnchorPoint = Vector2.new(0, 1),
 			Position = UDim2.new(0, 0, 1, 0),
-			Size = UDim2.new(1, 0, 0, Library.Sizes.Outline),
+			Size = UDim2.new(1, 0, 0, Sizes.Outline),
 			BorderSizePixel = 0,
 			Theme = { BackgroundColor3 = "OutlineDim" },
 			Parent = search,
@@ -158,10 +169,10 @@ function Dropdown.New(Library, container, index, options)
 			Name = "Field",
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			Position = UDim2.fromOffset(6, 0),
-			Size = UDim2.new(1, -12, 1, 0),
+			Position = UDim2.fromOffset(padX, 0),
+			Size = UDim2.new(1, -padX * 2, 1, 0),
 			Font = Library.Fonts.Label,
-			TextSize = Library.Sizes.TextSmall,
+			TextSize = Sizes.TextSmall,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextYAlignment = Enum.TextYAlignment.Center,
 			Text = "",
@@ -172,7 +183,7 @@ function Dropdown.New(Library, container, index, options)
 			Parent = search,
 		})
 
-		listOffset = SEARCH_HEIGHT
+		listOffset = searchHeight
 	end
 
 	element.List = Library:Create("ScrollingFrame", {
@@ -184,7 +195,7 @@ function Dropdown.New(Library, container, index, options)
 		CanvasSize = UDim2.new(0, 0, 0, 0),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
-		ScrollBarThickness = Library.Sizes.ScrollBar,
+		ScrollBarThickness = Sizes.ScrollBar,
 		-- Empty image: the stock scrollbar texture has rounded caps.
 		ScrollBarImage = "",
 		ScrollBarImageTransparency = 0,
@@ -201,7 +212,7 @@ function Dropdown.New(Library, container, index, options)
 			AutoButtonColor = false,
 			BorderSizePixel = 0,
 			Text = "",
-			Size = UDim2.new(1, 0, 0, Library.Sizes.RowHeight),
+			Size = UDim2.new(1, 0, 0, Sizes.RowHeight),
 			LayoutOrder = position,
 			Visible = false,
 			ClipsDescendants = true,
@@ -213,16 +224,17 @@ function Dropdown.New(Library, container, index, options)
 			Name = "Mark",
 			BorderSizePixel = 0,
 			Visible = false,
-			Size = UDim2.new(0, Library.Sizes.Indicator, 1, 0),
+			Size = UDim2.new(0, Sizes.Indicator, 1, 0),
 			Theme = { BackgroundColor3 = "Accent" },
 			Parent = frame,
 		})
 
+		-- Text clears the selection bar, then keeps a half pad on both sides.
 		local label = Library:Label({
 			Name = "Text",
-			Position = UDim2.fromOffset(8, 0),
-			Size = UDim2.new(1, -12, 1, 0),
-			TextSize = Library.Sizes.TextSmall,
+			Position = UDim2.fromOffset(Sizes.Indicator + padX, 0),
+			Size = UDim2.new(1, -(Sizes.Indicator + padX * 2), 1, 0),
+			TextSize = Sizes.TextSmall,
 			TextTruncate = Enum.TextTruncate.AtEnd,
 			Parent = frame,
 		}, "FontDim")
@@ -318,6 +330,8 @@ function Dropdown.New(Library, container, index, options)
 	function element:Capacity()
 		local width = self.ValueLabel.AbsoluteSize.X
 		if width <= 0 then
+			-- Character counts, not pixels: a conservative budget for the frame
+			-- before the first layout pass has measured the button.
 			return 18
 		end
 
@@ -511,12 +525,12 @@ function Dropdown.New(Library, container, index, options)
 		self.List.CanvasPosition = Vector2.zero
 
 		local shown = math.max(1, math.min(#self.Values, self.MaxVisible))
-		local height = shown * Library.Sizes.RowHeight + (self.Search and SEARCH_HEIGHT or 0)
+		local height = shown * Sizes.RowHeight + (self.Search and searchHeight or 0)
 
 		Library:OpenPopup(self.Popup, self.Button, {
 			Height = height,
-			Width = math.max(self.Button.AbsoluteSize.X, MIN_POPUP_WIDTH),
-			Gap = 2,
+			Width = math.max(self.Button.AbsoluteSize.X, Sizes.PopupMinWidth),
+			Gap = Sizes.RowGap,
 			OnClose = function()
 				self:SetOpened(false)
 			end,

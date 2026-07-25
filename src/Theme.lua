@@ -53,38 +53,50 @@ Theme.Aliases = {
 -- metrics
 --==============================================================
 
--- Dense on purpose. Instrument panels pack information; they do not breathe.
+-- Dense, but not cramped. Instrument panels pack information; they still need
+-- enough air that a row reads as a row. EVERY size in the library must come
+-- from this table -- a hardcoded pixel is a bug, because it will not move when
+-- these numbers do.
 Theme.Sizes = {
-	WindowWidth = 566,
-	WindowHeight = 604,
-	WindowMinWidth = 420,
-	WindowMinHeight = 320,
+	WindowWidth = 620,
+	WindowHeight = 660,
+	WindowMinWidth = 460,
+	WindowMinHeight = 360,
 
-	TitleBar = 30,
-	TabStrip = 26,
+	TitleBar = 34,
+	TabStrip = 30,
 
-	RowHeight = 20,
-	RowGap = 2,
+	RowHeight = 26,
+	RowGap = 4,
 
-	GroupPad = 8,
-	GroupGap = 8,
-	ColumnGap = 8,
-	GroupHeader = 18,
+	GroupPad = 12,
+	GroupGap = 12,
+	ColumnGap = 12,
+	GroupHeader = 20,
 
 	Outline = 1,
-	Tick = 7, -- corner tick arm length
+	Tick = 8, -- corner tick arm length
 	TickThickness = 1,
 
-	Text = 12, -- element labels
-	TextSmall = 11, -- readouts, captions, footer
-	TextTitle = 13, -- window title, group headers
+	Text = 13, -- element labels
+	TextSmall = 12, -- readouts, captions, footer
+	TextTitle = 14, -- window title, group headers
 
-	Control = 13, -- checkbox / swatch square edge
-	Track = 8, -- slider bar height
+	Control = 15, -- checkbox / swatch square edge
+	Track = 9, -- slider bar height
 	Segments = 16, -- slider segment count
 	Indicator = 2, -- active-tab underline thickness
 
+	-- The ColorPicker's saturation/value canvas. It is the one content surface
+	-- in the library that is not a row, a control or a column, so there is
+	-- nothing honest to derive it from -- it belongs here rather than as a magic
+	-- number inside the element.
+	PickerSquare = 144,
+
 	PopupWidth = 0, -- 0 = match anchor width
+	-- Floor for popups that otherwise match their anchor's width, so a narrow
+	-- control cannot open a sliver of a list. Roughly one groupbox column.
+	PopupMinWidth = 140,
 	PopupMaxItems = 9,
 
 	ScrollBar = 3,

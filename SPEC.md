@@ -98,11 +98,18 @@ switching works. **A hardcoded Color3 in an element is a bug.**
 
 ### Metrics — `Library.Sizes`
 
-`WindowWidth 566` · `WindowHeight 604` · `TitleBar 30` · `TabStrip 26` ·
-`RowHeight 20` · `RowGap 2` · `GroupPad 8` · `GroupGap 8` · `ColumnGap 8` ·
-`GroupHeader 18` · `Outline 1` · `Tick 7` · `Text 12` · `TextSmall 11` ·
-`TextTitle 13` · `Control 13` · `Track 8` · `Segments 16` · `Indicator 2` ·
-`PopupMaxItems 9` · `ScrollBar 3`
+`WindowWidth 620` · `WindowHeight 660` · `TitleBar 34` · `TabStrip 30` ·
+`RowHeight 26` · `RowGap 4` · `GroupPad 12` · `GroupGap 12` · `ColumnGap 12` ·
+`GroupHeader 20` · `Outline 1` · `Tick 8` · `Text 13` · `TextSmall 12` ·
+`TextTitle 14` · `Control 15` · `Track 9` · `Segments 16` · `Indicator 2` ·
+`PickerSquare 144` · `PopupMinWidth 140` · `PopupMaxItems 9` · `ScrollBar 3`
+
+Elements derive their internal gaps from these rather than inventing new keys.
+Half a `GroupPad` (`math.ceil(GroupPad / 2)`) is the library's inner gap unit —
+label-to-control, field padding, popup gutters — the same way `Window.lua`
+halves `ColumnGap`. `RowGap` is the between-things gap and doubles as leading
+(`TextSmall + RowGap` is one line of readout). `Outline` is the hairline atom:
+inner insets, cell gutters and marker overhangs are all counted in hairlines.
 
 ### Signature details
 
@@ -344,6 +351,8 @@ being closed. Notifications stack in `NotificationHolder` on
 ```lua
 Library.ThemeManager:SetLibrary(L) :SetFolder(path) :ApplyToTab(tab)
   :ApplyTheme(name) :LoadDefault() :SetDefault(name) .BuiltInThemes
+  :ThemesFolder() :SaveCustomTheme(name) :LoadCustomTheme(name)
+  :DeleteCustomTheme(name) :CustomThemeList() :RefreshCustomThemeList()
 Library.SaveManager:SetLibrary(L) :SetFolder(path) :IgnoreThemeSettings()
   :SetIgnoreIndexes({...}) :BuildConfigSection(tab) :LoadAutoloadConfig()
   :Save(name) :Load(name) :Delete(name) :RefreshConfigList()
@@ -365,6 +374,16 @@ to no-ops outside an executor.
 least: `Ember` (red), `Signal` (green), `Ice` (cyan), `Void` (violet, low
 saturation), `Mono` (no accent — accent is a light grey). Each is a full
 `Scheme` table; applying one calls `Library:SetScheme(table)`.
+
+Themes the user saves themselves are one JSON per theme at
+`<folder>/themes/<name>.json`, every scheme key written as a hex **string** —
+`HttpService` cannot encode a `Color3`. Loading rebuilds them with
+`Util.FromHex` and drops unknown or malformed keys instead of erroring. Names
+are sanitised exactly as `SaveManager:Sanitize` does, so one can never escape
+the folder; `default` is reserved, being the pointer file `:SetDefault` writes.
+The controls live in a **Custom themes** groupbox that `:ApplyToTab` appends
+after the theme editor, and their indexes are part of `ThemeManager.Indexes`,
+so `SaveManager:IgnoreThemeSettings()` keeps them out of configs.
 
 ---
 

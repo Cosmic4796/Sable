@@ -9,9 +9,6 @@ local Base = require("elements/Base")
 
 local Label = {}
 
---- Space kept between the caption and whatever sits in the addon slot.
-local ADDON_GAP = 4
-
 function Label.New(Library, container, text, doesWrap)
 	local wraps = doesWrap == true
 
@@ -19,9 +16,17 @@ function Label.New(Library, container, text, doesWrap)
 		Text = text ~= nil and tostring(text) or "",
 	})
 
+	local Sizes = Library.Sizes
+	--- Space kept between the caption and whatever sits in the addon slot; the
+	--- same gap the slot's own list layout uses between two addons.
+	local addonGap = Sizes.RowGap
+
 	-- A wrapping label cannot know its height until the text has been laid out
-	-- against the real column width, so the row measures itself instead.
-	local row = Library:Row(container, wraps and 0 or Library.Sizes.RowHeight)
+	-- against the real column width, so the row measures itself instead. The
+	-- declared height stays RowHeight either way: AutomaticSize treats it as a
+	-- floor, which is what keeps a one-line wrapped caption from collapsing
+	-- shorter than the addon pill docked beside it.
+	local row = Library:Row(container, Sizes.RowHeight)
 	row.Name = "LabelRow"
 	if wraps then
 		row.AutomaticSize = Enum.AutomaticSize.Y
@@ -37,7 +42,7 @@ function Label.New(Library, container, text, doesWrap)
 		AutomaticSize = wraps and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
 		TextWrapped = wraps,
 		TextYAlignment = wraps and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
-		TextSize = Library.Sizes.Text,
+		TextSize = Sizes.Text,
 		Text = Library:FormatLabel(element.Text),
 		Parent = row,
 	}, "FontDim")
@@ -61,7 +66,7 @@ function Label.New(Library, container, text, doesWrap)
 		HorizontalAlignment = Enum.HorizontalAlignment.Right,
 		VerticalAlignment = Enum.VerticalAlignment.Center,
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, ADDON_GAP),
+		Padding = UDim.new(0, addonGap),
 		Parent = element.Right,
 	})
 
@@ -70,7 +75,7 @@ function Label.New(Library, container, text, doesWrap)
 	local function reserve()
 		local used = element.Right.AbsoluteSize.X
 		if used > 0 then
-			used += ADDON_GAP
+			used += addonGap
 		end
 		caption.Size = UDim2.new(1, -used, wraps and 0 or 1, 0)
 	end

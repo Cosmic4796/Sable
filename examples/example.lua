@@ -26,7 +26,6 @@ local Tabs = {
 	Main = Window:AddTab("Main"),
 	Visuals = Window:AddTab("Visuals"),
 	Player = Window:AddTab("Player"),
-	Settings = Window:AddTab("Settings"),
 }
 
 --==============================================================
@@ -200,52 +199,18 @@ Info:AddLabel("A wrapping label, used for longer explanatory copy that needs mor
 -- Settings
 --==============================================================
 
-local MenuGroup = Tabs.Settings:AddLeftGroupbox("Menu")
-
-MenuGroup:AddKeyPicker("MenuKeybind", {
-	Default = "INS",
-	Mode = "Toggle",
-	Text = "Menu",
-	NoUI = true,
-	Callback = function() end,
-	ChangedCallback = function() end,
-})
-
-MenuGroup:AddToggle("WatermarkVisible", {
-	Text = "Watermark",
-	Default = true,
-	Callback = function(value)
-		Library:SetWatermarkVisibility(value)
-	end,
-})
-
-MenuGroup:AddToggle("KeybindsVisible", {
-	Text = "Keybind list",
-	Default = true,
-	Callback = function(value)
-		Library:SetKeybindVisibility(value)
-	end,
-})
-
-MenuGroup:AddButton({ Text = "Unload", Func = function() Library:Unload() end })
-
-Library.Options.MenuKeybind:OnChanged(function(value)
-	Library:SetMenuKeybind(value)
-end)
-
 Library:SetWatermark("SABLE")
 
-ThemeManager:SetLibrary(Library)
-SaveManager:SetLibrary(Library)
-
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({ "MenuKeybind", "WatermarkVisible", "KeybindsVisible" })
-
+-- Per-hub folders, so two scripts using Sable cannot overwrite each other's
+-- configs. Set these BEFORE AddSettingsTab -- it only fills in a folder that
+-- has not been chosen.
 ThemeManager:SetFolder("Sable")
 SaveManager:SetFolder("Sable/example")
 
-SaveManager:BuildConfigSection(Tabs.Settings)
-ThemeManager:ApplyToTab(Tabs.Settings)
+-- One call builds the whole tab: the Menu groupbox (keybind, watermark,
+-- keybind list, unload), the theme editor and the config section, with the
+-- menu preferences already excluded from saved configs.
+Tabs.Settings = Window:AddSettingsTab()
 
 -- Restores the theme picked with "set as default" on a previous run. Without
 -- this, that button appears to do nothing across sessions.

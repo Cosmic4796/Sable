@@ -16,8 +16,11 @@ local NAME_INDEX = "SaveManager_ConfigName"
 local LIST_INDEX = "SaveManager_ConfigList"
 
 --- Fallback for :IgnoreThemeSettings when the ThemeManager is not reachable.
+--- Mirrors ThemeManager.Indexes; keep the two in step.
 local THEME_INDEXES = {
 	"ThemeManager_ThemeList",
+	"ThemeManager_CustomName",
+	"ThemeManager_CustomList",
 	"ThemeManager_AccentColor",
 	"ThemeManager_BackgroundColor",
 	"ThemeManager_PanelColor",

@@ -14,38 +14,63 @@ local Overlays = {}
 -- metrics
 --==============================================================
 
-local HUD_MARGIN = 10
-local HUD_GAP = 6
-
-local WATERMARK_HEIGHT = 20
-local WATERMARK_PAD_X = 6
-local WATERMARK_SPACING = 5
 local WATERMARK_REFRESH = 0.25 -- ~4 recomputes/sec
+local NOTIFY_DEFAULT_TIME = 5
 
 -- ASCII pipe on purpose: the Code font has no box-drawing glyphs, and a missing
 -- glyph renders as tofu on some platforms.
 local SEPARATOR = "|"
 
-local BIND_ROW_HEIGHT = 16
-local BIND_PAD_X = 6
-local BIND_PAD_Y = 3
-local BIND_SPACING = 6
+-- A character budget, not a pixel one: the bind list is monospace and auto-width,
+-- so it is the glyph count that has to be bounded.
 local BIND_TEXT_MAX = 32
 
-local NOTIFY_WIDTH = 236
-local NOTIFY_BAR = 2
-local NOTIFY_PAD_X = 7
-local NOTIFY_PAD_Y = 5
-local NOTIFY_GAP = 6
-local NOTIFY_MARGIN = 12
-local NOTIFY_TITLE_HEIGHT = 14
-local NOTIFY_MIN_HEIGHT = 24
-local NOTIFY_DEFAULT_TIME = 5
+-- Unbounded height for a wrapped measurement. TextService needs a finite box;
+-- this is "taller than any notification could ever be", not a layout metric.
+local MEASURE_HEIGHT = 4096
 
 function Overlays.Install(Library)
 	local Sizes = Library.Sizes
 	local Fonts = Library.Fonts
 	local SlowTime = Library.Motion.Slow.Time
+
+	-- Half a group pad is the library's inner gap unit; Window.lua splits
+	-- ColumnGap and GroupPad the same way.
+	local halfPad = math.ceil(Sizes.GroupPad / 2)
+	local halfGap = math.ceil(Sizes.GroupGap / 2)
+
+	-- The HUD sits a group pad in from the screen edge, exactly as a groupbox
+	-- sits a group pad in from the window edge.
+	local HUD_MARGIN = Sizes.GroupPad
+	local HUD_GAP = halfGap
+
+	-- One line of chrome: the same height a row of the menu gets.
+	local WATERMARK_HEIGHT = Sizes.RowHeight
+	local WATERMARK_PAD_X = halfPad
+	local WATERMARK_SPACING = Sizes.RowGap
+
+	-- A bind row is one line of readout text plus a row gap of leading. It is
+	-- deliberately not RowHeight: the HUD list is a readout, not a control strip.
+	local BIND_ROW_HEIGHT = Sizes.TextSmall + Sizes.RowGap
+	local BIND_PAD_X = halfPad
+	local BIND_PAD_Y = Sizes.RowGap
+	local BIND_SPACING = halfPad
+	-- The row height already carries the leading, so rows only need parting.
+	local BIND_ROW_GAP = Sizes.Outline
+
+	-- A notification is one groupbox column wide, so the HUD keeps the same
+	-- rhythm as the menu: the window body minus its pad on both sides, halved
+	-- across the column gap.
+	local NOTIFY_WIDTH = math.floor((Sizes.WindowWidth - Sizes.GroupPad * 2 - Sizes.ColumnGap) / 2)
+	-- The left edge bar is an accent marker, the same weight as the tab underline.
+	local NOTIFY_BAR = Sizes.Indicator
+	local NOTIFY_PAD_X = Sizes.GroupPad
+	local NOTIFY_PAD_Y = halfPad
+	local NOTIFY_GAP = halfGap
+	local NOTIFY_MARGIN = Sizes.GroupPad
+	-- One line of title text plus a row gap of leading; same rule as a bind row.
+	local NOTIFY_TITLE_HEIGHT = Sizes.Text + Sizes.RowGap
+	local NOTIFY_MIN_HEIGHT = Sizes.RowHeight
 
 	--- Destroying an instance leaves its colour registry entries behind, and
 	--- overlays churn instances constantly -- prune before the instance dies.
@@ -242,7 +267,7 @@ function Overlays.Install(Library)
 	}, "Panel", "Outline")
 
 	Util.Padding(keybindPanel, BIND_PAD_Y, BIND_PAD_X, BIND_PAD_Y, BIND_PAD_X)
-	Util.ListLayout(keybindPanel, 1)
+	Util.ListLayout(keybindPanel, BIND_ROW_GAP)
 
 	local bindRows = {}
 	local bindCount = 0
@@ -477,12 +502,13 @@ function Overlays.Install(Library)
 		local inner = NOTIFY_WIDTH - NOTIFY_BAR - NOTIFY_PAD_X * 2
 		local bodyHeight = 0
 		if bodyText then
-			local measured = Util.TextSize(bodyText, Sizes.TextSmall, Fonts.Label, Vector2.new(inner, 4096))
-			bodyHeight = math.max(math.ceil(measured.Y), Sizes.TextSmall + 2)
+			local measured =
+				Util.TextSize(bodyText, Sizes.TextSmall, Fonts.Label, Vector2.new(inner, MEASURE_HEIGHT))
+			bodyHeight = math.max(math.ceil(measured.Y), Sizes.TextSmall + Sizes.RowGap)
 		end
 
 		local titleHeight = titleText and NOTIFY_TITLE_HEIGHT or 0
-		local innerGap = (titleText and bodyText) and 2 or 0
+		local innerGap = (titleText and bodyText) and Sizes.RowGap or 0
 		local height =
 			math.max(NOTIFY_PAD_Y * 2 + titleHeight + innerGap + bodyHeight, NOTIFY_MIN_HEIGHT)
 

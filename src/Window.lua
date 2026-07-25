@@ -15,6 +15,14 @@ local Elements = require("elements/init")
 
 local Window = {}
 
+-- Indexes AddSettingsTab registers. "MenuKeybind" keeps its plain Linoria name
+-- so ported scripts reading Options.MenuKeybind still find it; the other two are
+-- prefixed, because a hub is far more likely to own "Watermark" than
+-- "SableWatermark" and a collision would silently replace its element.
+local MENU_KEYBIND_INDEX = "MenuKeybind"
+local WATERMARK_INDEX = "SableWatermark"
+local KEYBIND_LIST_INDEX = "SableKeybindList"
+
 function Window.Install(Library)
 	local Sizes = Library.Sizes
 
@@ -659,6 +667,94 @@ function Window.Install(Library)
 
 		if #self.Tabs == 1 then
 			self:SetTab(tab)
+		end
+
+		return tab
+	end
+
+	--- Both addons ship with a folder already set, so this only fills in a
+	--- manager whose folder a host script cleared. SetFolder is called rather
+	--- than assigning `.Folder` because it also creates the directory on disk.
+	local function defaultFolder(manager)
+		if type(manager) ~= "table" or type(manager.SetFolder) ~= "function" then
+			return
+		end
+		if type(manager.Folder) == "string" and manager.Folder ~= "" then
+			return
+		end
+		manager:SetFolder(Library.Name)
+	end
+
+	--- The whole settings tab in one call: menu preferences, the theme editor
+	--- and the config section. Every index it registers is added to the
+	--- SaveManager ignore list, so a config file carries game settings only and
+	--- never another machine's menu keybind.
+	---
+	--- Both addons are optional here. A build with either one stripped out still
+	--- gets the Menu groupbox and a usable tab.
+	function WindowMeta:AddSettingsTab(name)
+		local tab = self:AddTab(type(name) == "string" and name ~= "" and name or "Settings")
+
+		local menu = tab:AddLeftGroupbox("Menu")
+
+		menu:AddKeyPicker(MENU_KEYBIND_INDEX, {
+			Default = Library.MenuKeybind,
+			Mode = "Toggle",
+			Text = "Menu",
+			-- The bind that opens the menu has no business in the keybind list:
+			-- it is the one bind the user cannot forget.
+			NoUI = true,
+			Tooltip = "Opens and closes the menu",
+			ChangedCallback = function(value)
+				Library:SetMenuKeybind(value)
+			end,
+		})
+
+		menu:AddToggle(WATERMARK_INDEX, {
+			Text = "Watermark",
+			Default = true,
+			Callback = function(value)
+				Library:SetWatermarkVisibility(value)
+			end,
+		})
+
+		menu:AddToggle(KEYBIND_LIST_INDEX, {
+			Text = "Keybind list",
+			Default = true,
+			Callback = function(value)
+				Library:SetKeybindVisibility(value)
+			end,
+		})
+
+		menu:AddDivider()
+
+		menu:AddButton({
+			Text = "Unload",
+			DoubleClick = true,
+			Tooltip = "Double click to remove the menu",
+			Func = function()
+				Library:Unload()
+			end,
+		})
+
+		local themeManager = Library.ThemeManager
+		local saveManager = Library.SaveManager
+
+		defaultFolder(themeManager)
+		defaultFolder(saveManager)
+
+		if type(saveManager) == "table" then
+			-- Menu preferences belong to the person, not to the config. Both
+			-- calls ADD to the ignore set, so whatever the host script already
+			-- ignored survives.
+			saveManager:IgnoreThemeSettings()
+			saveManager:SetIgnoreIndexes({ MENU_KEYBIND_INDEX, WATERMARK_INDEX, KEYBIND_LIST_INDEX })
+
+			saveManager:BuildConfigSection(tab)
+		end
+
+		if type(themeManager) == "table" then
+			themeManager:ApplyToTab(tab)
 		end
 
 		return tab

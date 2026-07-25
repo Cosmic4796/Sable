@@ -83,26 +83,38 @@ local function nextAddonOrder(right)
 	return 10 + used
 end
 
+--- Half a group pad: the library's inner gap unit. Window.lua splits ColumnGap
+--- and GroupPad the same way.
+local function halfPad(Library)
+	return math.ceil(Library.Sizes.GroupPad / 2)
+end
+
 --- The pill itself: hairline panel, monospace bind name, auto width.
 local function buildPill(Library, parent, standalone, layoutOrder)
+	local Sizes = Library.Sizes
+	local padX = halfPad(Library)
+
 	local pill, stroke = Library:Panel({
 		Name = "Bind",
 		AnchorPoint = standalone and Vector2.new(1, 0.5) or Vector2.new(0, 0),
 		Position = standalone and UDim2.new(1, 0, 0.5, 0) or UDim2.new(0, 0, 0, 0),
-		Size = UDim2.new(0, 0, 0, Library.Sizes.Control + 1),
+		-- One control square tall plus a row gap of air, so the bind text is not
+		-- jammed against the hairline. Still short enough that the pill, its
+		-- stroke and a swatch all clear a RowHeight addon slot.
+		Size = UDim2.new(0, 0, 0, Sizes.Control + Sizes.RowGap),
 		AutomaticSize = Enum.AutomaticSize.X,
 		LayoutOrder = layoutOrder or 1,
 		Parent = parent,
 	}, "Panel", "Outline")
 
-	Util.Padding(pill, 0, 5, 0, 5)
+	Util.Padding(pill, 0, padX, 0, padX)
 
 	local value = Library:Label({
 		Name = "Value",
 		Size = UDim2.new(0, 0, 1, 0),
 		AutomaticSize = Enum.AutomaticSize.X,
 		Font = Library.Fonts.Value,
-		TextSize = Library.Sizes.TextSmall,
+		TextSize = Sizes.TextSmall,
 		TextXAlignment = Enum.TextXAlignment.Center,
 		Text = "NONE",
 		Parent = pill,
@@ -301,15 +313,20 @@ local function install(Library, element, options, host, pill, stroke, value, hit
 	-- mode popup
 	--==========================================================
 
-	local rowHeight = Library.Sizes.RowHeight
-	local popupHeight = rowHeight * #MODES + 2
+	local Sizes = Library.Sizes
+	local padX = halfPad(Library)
+
+	local rowHeight = Sizes.RowHeight
+	-- The rows sit inside a one-hairline inset, which the popup has to carry.
+	local popupHeight = rowHeight * #MODES + Sizes.Outline * 2
 	local popupWidth = 0
 
 	for _, mode in MODES do
-		local measured = Util.TextSize(Library:FormatLabel(mode), Library.Sizes.TextSmall, Library.Fonts.Value)
+		local measured = Util.TextSize(Library:FormatLabel(mode), Sizes.TextSmall, Library.Fonts.Value)
 		popupWidth = math.max(popupWidth, measured.X)
 	end
-	popupWidth = math.ceil(popupWidth) + 16
+	-- Widest mode name, plus each row's own padding and the same hairline inset.
+	popupWidth = math.ceil(popupWidth) + padX * 2 + Sizes.Outline * 2
 
 	local function buildPopup()
 		if popupFrame then
@@ -336,7 +353,7 @@ local function install(Library, element, options, host, pill, stroke, value, hit
 			Parent = frame,
 		})
 
-		Util.Padding(content, 1, 1, 1, 1)
+		Util.Padding(content, Sizes.Outline, Sizes.Outline, Sizes.Outline, Sizes.Outline)
 		Util.ListLayout(content, 0)
 
 		popupRows = {}
@@ -353,12 +370,12 @@ local function install(Library, element, options, host, pill, stroke, value, hit
 				Name = "Text",
 				Size = UDim2.fromScale(1, 1),
 				Font = Library.Fonts.Value,
-				TextSize = Library.Sizes.TextSmall,
+				TextSize = Sizes.TextSmall,
 				Text = Library:FormatLabel(mode),
 				Parent = rowFrame,
 			}, "FontDim")
 
-			Util.Padding(rowLabel, 0, 6, 0, 6)
+			Util.Padding(rowLabel, 0, padX, 0, padX)
 
 			local rowHit = Library:HitButton(rowFrame, { Name = "Hit" })
 			Library:BindHover(rowHit, rowFrame, "Panel", "PanelRaised")
@@ -615,8 +632,10 @@ function KeyPicker.New(Library, container, index, options)
 
 	-- The pill's width is only known once AutomaticSize has run, so the label
 	-- reserves its space reactively instead of guessing.
+	local labelGap = halfPad(Library)
+
 	Library:GiveSignal(pill:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
-		label.Size = UDim2.new(1, -(pill.AbsoluteSize.X + 6), 1, 0)
+		label.Size = UDim2.new(1, -(pill.AbsoluteSize.X + labelGap), 1, 0)
 	end))
 
 	install(Library, element, options, nil, pill, stroke, value, hit)

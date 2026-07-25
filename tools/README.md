@@ -18,7 +18,7 @@ failure.
 | `check.ps1` | the full gate: syntax → src typecheck → bundle typecheck → smoke |
 | `smoke.py` | assembles mock + bundle + test into one chunk and runs it under `luau` |
 | `mock_roblox.luau` | headless Roblox API mock |
-| `smoke_test.luau` | 122 assertions run against the real bundle |
+| `smoke_test.luau` | assertions run against the real bundle (`check.ps1` prints the count) |
 | `globalTypes.d.luau` | Roblox API type definitions for `luau-lsp` |
 
 ## The bundler

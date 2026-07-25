@@ -20,18 +20,11 @@ local ColorPicker = {}
 -- geometry
 --==============================================================
 
-local PAD = 8
-local GAP = 6
-local SV_SIZE = 132
-local BAR_WIDTH = 12
-local ALPHA_HEIGHT = 10
-local FIELD_HEIGHT = 18
-local COPY_WIDTH = 44
-local TITLE_HEIGHT = 12
+-- The SV crosshair is sized against the surface it sits ON, not against the
+-- design grid: it has to stay small enough that the colour underneath it is
+-- still readable however large the canvas gets. A layout metric here would make
+-- the marker swallow the thing it is pointing at.
 local CURSOR_SIZE = 7
-
-local CONTENT_WIDTH = SV_SIZE + GAP + BAR_WIDTH
-local POPUP_WIDTH = CONTENT_WIDTH + PAD * 2
 
 -- Pure white and pure black are not theming here, they are the arithmetic of
 -- the HSV square: saturation fades toward white, value fades toward black. A
@@ -40,6 +33,8 @@ local POPUP_WIDTH = CONTENT_WIDTH + PAD * 2
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
 
+-- Six equal steps around the hue wheel. A property of the colour space, not a
+-- layout choice, so it does not scale with anything.
 local hueStops = table.create(7)
 for step = 0, 6 do
 	local alpha = step / 6
@@ -57,6 +52,39 @@ local FADE_IN = NumberSequence.new({
 	NumberSequenceKeypoint.new(0, 1),
 	NumberSequenceKeypoint.new(1, 0),
 })
+
+--- Every popup dimension, derived from the design system. Built per element
+--- rather than once at module scope because the copy button is measured from
+--- live text metrics, which need the Library's fonts.
+local function geometry(Library)
+	local sizes = Library.Sizes
+
+	-- Half a group pad is the library's internal gap unit; Window.lua splits
+	-- ColumnGap and GroupPad the same way.
+	local gap = math.ceil(sizes.GroupPad / 2)
+	local copyText = Library:FormatLabel("Copy")
+
+	local geo = {
+		Pad = sizes.GroupPad,
+		Gap = gap,
+		-- Hue and alpha bars are one control square thick, so they carry the
+		-- same visual weight as the swatch that opened the popup.
+		Bar = sizes.Control,
+		Square = sizes.PickerSquare,
+		-- The popup's caption band is a group header by another name.
+		TitleHeight = sizes.GroupHeader,
+		-- The hex field and its copy button are a row of the popup.
+		FieldHeight = sizes.RowHeight,
+		CopyText = copyText,
+		CopyWidth = math.ceil(Util.TextSize(copyText, sizes.TextSmall, Library.Fonts.Label).X)
+			+ sizes.GroupPad * 2,
+	}
+
+	geo.Content = geo.Square + geo.Gap + geo.Bar
+	geo.Width = geo.Content + geo.Pad * 2
+
+	return geo
+end
 
 --==============================================================
 -- helpers
@@ -111,6 +139,7 @@ local function build(Library, container, host, index, options)
 
 	local sizes = Library.Sizes
 	local control = sizes.Control
+	local geo = geometry(Library)
 
 	local default = typeof(options.Default) == "Color3" and options.Default or Library:GetColor("Accent")
 	local hue, saturation, value = default:ToHSV()
@@ -155,7 +184,7 @@ local function build(Library, container, host, index, options)
 		element.Label = Library:Label({
 			Name = "Label",
 			Text = Library:FormatLabel(element.Text),
-			Size = UDim2.new(1, -(control + GAP), 1, 0),
+			Size = UDim2.new(1, -(control + geo.Gap), 1, 0),
 			Parent = row,
 		}, element.Risky and "Risk" or "Font")
 	end
@@ -192,9 +221,9 @@ local function build(Library, container, host, index, options)
 	local dragging = nil
 
 	local function popupHeight()
-		local height = PAD + TITLE_HEIGHT + GAP + SV_SIZE + GAP + FIELD_HEIGHT + PAD
+		local height = geo.Pad + geo.TitleHeight + geo.Gap + geo.Square + geo.Gap + geo.FieldHeight + geo.Pad
 		if hasAlpha then
-			height += ALPHA_HEIGHT + GAP
+			height += geo.Bar + geo.Gap
 		end
 		return height
 	end
@@ -264,7 +293,7 @@ local function build(Library, container, host, index, options)
 		local frame = Library:Panel({
 			Name = "ColorPopup",
 			Visible = false,
-			Size = UDim2.fromOffset(POPUP_WIDTH, popupHeight()),
+			Size = UDim2.fromOffset(geo.Width, popupHeight()),
 			Parent = Library.PopupHolder,
 		}, "Panel", "Outline")
 		popupFrame = frame
@@ -275,12 +304,12 @@ local function build(Library, container, host, index, options)
 			Name = "Title",
 			Text = Library:Chrome(element.Title),
 			TextSize = sizes.TextSmall,
-			Position = UDim2.fromOffset(PAD, PAD),
-			Size = UDim2.new(1, -PAD * 2, 0, TITLE_HEIGHT),
+			Position = UDim2.fromOffset(geo.Pad, geo.Pad),
+			Size = UDim2.new(1, -geo.Pad * 2, 0, geo.TitleHeight),
 			Parent = frame,
 		}, "FontDim")
 
-		local cursorY = PAD + TITLE_HEIGHT + GAP
+		local cursorY = geo.Pad + geo.TitleHeight + geo.Gap
 
 		--------------------------------------------------------
 		-- saturation / value square
@@ -290,8 +319,10 @@ local function build(Library, container, host, index, options)
 			Name = "SV",
 			BorderSizePixel = 0,
 			BackgroundColor3 = Color3.fromHSV(element.Hue, 1, 1),
-			Position = UDim2.fromOffset(PAD, cursorY),
-			Size = UDim2.fromOffset(SV_SIZE, SV_SIZE),
+			Position = UDim2.fromOffset(geo.Pad, cursorY),
+			-- Square by construction: saturation runs one axis, value the other,
+			-- so equal edges keep both at the same sensitivity per pixel.
+			Size = UDim2.fromOffset(geo.Square, geo.Square),
 			Parent = frame,
 		})
 		Library:AddToRegistry(
@@ -339,19 +370,27 @@ local function build(Library, container, host, index, options)
 			ZIndex = 4,
 			Parent = svBase,
 		})
-		Library:AddToRegistry(Util.Stroke(svCursor, Library:GetColor("Black"), 1), { Color = "Black" })
+		Library:AddToRegistry(
+			Util.Stroke(svCursor, Library:GetColor("Black"), sizes.Outline),
+			{ Color = "Black" }
+		)
 
+		-- Inset by exactly one hairline on each side: the two rings have to be
+		-- adjacent, or the pair stops reading as a single marker.
 		local cursorInner = Library:Create("Frame", {
 			Name = "Inner",
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.new(1, -2, 1, -2),
+			Size = UDim2.new(1, -sizes.Outline * 2, 1, -sizes.Outline * 2),
 			ZIndex = 4,
 			Parent = svCursor,
 		})
-		Library:AddToRegistry(Util.Stroke(cursorInner, Library:GetColor("Font"), 1), { Color = "Font" })
+		Library:AddToRegistry(
+			Util.Stroke(cursorInner, Library:GetColor("Font"), sizes.Outline),
+			{ Color = "Font" }
+		)
 
 		bindTrack(Library:HitButton(svBase, { Name = "SVHit" }), "SV")
 
@@ -365,8 +404,8 @@ local function build(Library, container, host, index, options)
 			-- A UIGradient multiplies the fill, so the base has to be white for
 			-- the spectrum keypoints to come through unshifted.
 			BackgroundColor3 = WHITE,
-			Position = UDim2.fromOffset(PAD + SV_SIZE + GAP, cursorY),
-			Size = UDim2.fromOffset(BAR_WIDTH, SV_SIZE),
+			Position = UDim2.fromOffset(geo.Pad + geo.Square + geo.Gap, cursorY),
+			Size = UDim2.fromOffset(geo.Bar, geo.Square),
 			Parent = frame,
 		})
 		Util.Create("UIGradient", {
@@ -380,21 +419,26 @@ local function build(Library, container, host, index, options)
 			{ Color = "Outline" }
 		)
 
+		-- Overhangs its bar by a hairline on each side so the marker reads as a
+		-- cut across the track rather than a block sitting inside it.
 		hueMarker = Library:Create("Frame", {
 			Name = "Marker",
 			BorderSizePixel = 0,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0),
-			Size = UDim2.new(1, 2, 0, 2),
+			Size = UDim2.new(1, sizes.Outline * 2, 0, sizes.Indicator),
 			ZIndex = 2,
 			Theme = { BackgroundColor3 = "Font" },
 			Parent = hueBar,
 		})
-		Library:AddToRegistry(Util.Stroke(hueMarker, Library:GetColor("Black"), 1), { Color = "Black" })
+		Library:AddToRegistry(
+			Util.Stroke(hueMarker, Library:GetColor("Black"), sizes.Outline),
+			{ Color = "Black" }
+		)
 
 		bindTrack(Library:HitButton(hueBar, { Name = "HueHit" }), "Hue")
 
-		cursorY += SV_SIZE + GAP
+		cursorY += geo.Square + geo.Gap
 
 		--------------------------------------------------------
 		-- alpha bar
@@ -403,8 +447,8 @@ local function build(Library, container, host, index, options)
 		if hasAlpha then
 			alphaBase = Library:Panel({
 				Name = "Alpha",
-				Position = UDim2.fromOffset(PAD, cursorY),
-				Size = UDim2.fromOffset(CONTENT_WIDTH, ALPHA_HEIGHT),
+				Position = UDim2.fromOffset(geo.Pad, cursorY),
+				Size = UDim2.fromOffset(geo.Content, geo.Bar),
 				Parent = frame,
 			}, "PanelSunken", "Outline")
 
@@ -422,33 +466,37 @@ local function build(Library, container, host, index, options)
 				Parent = alphaFill,
 			})
 
+			-- Same construction as the hue marker, rotated: a cut across the bar.
 			alphaMarker = Library:Create("Frame", {
 				Name = "Marker",
 				BorderSizePixel = 0,
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0, 0.5),
-				Size = UDim2.new(0, 2, 1, 2),
+				Size = UDim2.new(0, sizes.Indicator, 1, sizes.Outline * 2),
 				ZIndex = 3,
 				Theme = { BackgroundColor3 = "Font" },
 				Parent = alphaBase,
 			})
-			Library:AddToRegistry(Util.Stroke(alphaMarker, Library:GetColor("Black"), 1), { Color = "Black" })
+			Library:AddToRegistry(
+				Util.Stroke(alphaMarker, Library:GetColor("Black"), sizes.Outline),
+				{ Color = "Black" }
+			)
 
 			bindTrack(Library:HitButton(alphaBase, { Name = "AlphaHit" }), "Alpha")
 
-			cursorY += ALPHA_HEIGHT + GAP
+			cursorY += geo.Bar + geo.Gap
 		end
 
 		--------------------------------------------------------
 		-- hex field + copy
 		--------------------------------------------------------
 
-		local fieldWidth = CONTENT_WIDTH - COPY_WIDTH - GAP
+		local fieldWidth = geo.Content - geo.CopyWidth - geo.Gap
 
 		local field = Library:Panel({
 			Name = "Hex",
-			Position = UDim2.fromOffset(PAD, cursorY),
-			Size = UDim2.fromOffset(fieldWidth, FIELD_HEIGHT),
+			Position = UDim2.fromOffset(geo.Pad, cursorY),
+			Size = UDim2.fromOffset(fieldWidth, geo.FieldHeight),
 			Parent = frame,
 		}, "PanelSunken", "Outline")
 
@@ -482,14 +530,14 @@ local function build(Library, container, host, index, options)
 
 		local copy = Library:Panel({
 			Name = "Copy",
-			Position = UDim2.fromOffset(PAD + fieldWidth + GAP, cursorY),
-			Size = UDim2.fromOffset(COPY_WIDTH, FIELD_HEIGHT),
+			Position = UDim2.fromOffset(geo.Pad + fieldWidth + geo.Gap, cursorY),
+			Size = UDim2.fromOffset(geo.CopyWidth, geo.FieldHeight),
 			Parent = frame,
 		}, "Panel", "Outline")
 
 		Library:Label({
 			Name = "Text",
-			Text = Library:FormatLabel("Copy"),
+			Text = geo.CopyText,
 			TextSize = sizes.TextSmall,
 			TextXAlignment = Enum.TextXAlignment.Center,
 			Size = UDim2.fromScale(1, 1),
@@ -584,9 +632,9 @@ local function build(Library, container, host, index, options)
 		self:Display()
 
 		popupHandle = Library:OpenPopup(frame, swatch, {
-			Width = POPUP_WIDTH,
+			Width = geo.Width,
 			Height = popupHeight(),
-			Gap = 4,
+			Gap = sizes.RowGap,
 			OnClose = function()
 				dragging = nil
 			end,
