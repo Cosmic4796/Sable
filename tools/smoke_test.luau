@@ -384,6 +384,264 @@ step("silly segment counts are folded into range", function()
 	many:Destroy()
 end)
 
+--==============================================================
+-- the shared numeric row
+--==============================================================
+
+-- Slider and ProgressBar are one row -- label, segmented track, readout -- with
+-- the interaction present or absent. The arithmetic behind it lived as two
+-- byte-identical copies for a while, which is a fix to one of them waiting to
+-- pass while the other keeps the bug, so these assert that the two AGREE rather
+-- than asserting each on its own.
+
+--- Cells painted with `key`, read off the frames rather than off any bookkeeping
+--- the element keeps. litSegments above is the accent-only case of this.
+local function segmentsPainted(element, key)
+	local color = Library:GetColor(key)
+	local count = 0
+	for _, record in element.Bar.Segments do
+		if record.Frame.BackgroundColor3 == color then
+			count += 1
+		end
+	end
+	return count
+end
+
+for _, name in { "Display", "SetValue", "SetMin", "SetMax", "SetText" } do
+	check("a slider has :" .. name, type(O.Fov[name]) == "function")
+	check("a progress bar has :" .. name, type(O.Farm[name]) == "function")
+end
+
+step("the same bounds read the same on both", function()
+	local slider = Left:AddSlider("PairSlider", { Text = "Pair", Min = -10, Max = 10, Rounding = 1, Suffix = "u" })
+	local bar = Left:AddProgressBar("PairBar", { Text = "Pair", Min = -10, Max = 10, Rounding = 1, Suffix = "u" })
+	local sliderText = slider.Row:FindFirstChild("Readout")
+	local barText = bar.Row:FindFirstChild("Readout")
+
+	check(
+		"both size the readout column the same",
+		sliderText.Size.X.Offset == barText.Size.X.Offset,
+		("%d vs %d"):format(sliderText.Size.X.Offset, barText.Size.X.Offset)
+	)
+
+	for _, value in { -10, -5.25, -0.04, 0, 3.14159, 10, 9999 } do
+		slider:SetValue(value)
+		bar:SetValue(value)
+		local tag = tostring(value)
+		check("both clamp and round " .. tag, slider.Value == bar.Value, ("%s vs %s"):format(tostring(slider.Value), tostring(bar.Value)))
+		check("both render " .. tag, sliderText.Text == barText.Text, sliderText.Text .. " vs " .. barText.Text)
+		check(
+			"both light the same cells at " .. tag,
+			segmentsPainted(slider, "Accent") == segmentsPainted(bar, "Accent"),
+			("%d vs %d"):format(segmentsPainted(slider, "Accent"), segmentsPainted(bar, "Accent"))
+		)
+	end
+
+	slider:Destroy()
+	bar:Destroy()
+end)
+
+-- math.floor(v + 0.5) alone renders -5 as "-6", which is why the row rounds
+-- half AWAY from zero. One row means one place that can get this wrong; two
+-- rows meant two, and only ever one of them was being asserted.
+step("a negative integer is not floored twice", function()
+	local slider = Left:AddSlider("NegSlider", { Text = "n", Default = -5, Min = -20, Max = 20 })
+	local bar = Left:AddProgressBar("NegBar", { Text = "n", Default = -5, Min = -20, Max = 20 })
+	check("slider renders -5", slider.Row:FindFirstChild("Readout").Text == "-5", slider.Row:FindFirstChild("Readout").Text)
+	check("progress bar renders -5", bar.Row:FindFirstChild("Readout").Text == "-5%", bar.Row:FindFirstChild("Readout").Text)
+	slider:Destroy()
+	bar:Destroy()
+end)
+
+-- Rounding is the one piece of the arithmetic only the slider ever asserted, and
+-- an agreement check cannot see it: two elements reading the same shared code
+-- agree just as well after the rounding step is dropped for both. This pins it
+-- from the bar's side with an ABSOLUTE value, so deleting Util.Round from the
+-- shared row fails here as well as at "slider rounding=2".
+step("a progress bar rounds to its decimals", function()
+	local bar = Left:AddProgressBar("RoundBar", { Text = "r", Min = 0, Max = 1, Rounding = 2 })
+	bar:SetValue(0.126)
+	check("progress rounding=2", math.abs(bar.Value - 0.13) < 1e-6, bar.Value)
+
+	-- The decimal readout pads rather than truncating, so a column of values
+	-- stays aligned under a monospace font.
+	bar:SetValue(0.1)
+	check(
+		"and the readout keeps both places",
+		bar.Row:FindFirstChild("Readout").Text == "0.10%",
+		bar.Row:FindFirstChild("Readout").Text
+	)
+	bar:Destroy()
+end)
+
+-- The readout is sized for the WIDEST value the bounds allow, so the track does
+-- not twitch as digits come and go. Nothing asserted that on either element --
+-- pinning the width to a constant, or letting the track run under the readout,
+-- used to pass the whole suite.
+step("the readout column is sized for the bounds, not the value", function()
+	local narrow = Left:AddProgressBar("WidthNarrow", { Text = "w", Min = 0, Max = 9 })
+	local wide = Left:AddProgressBar("WidthWide", { Text = "w", Min = 0, Max = 99999 })
+	local narrowWidth = narrow.Row:FindFirstChild("Readout").Size.X.Offset
+	local wideWidth = wide.Row:FindFirstChild("Readout").Size.X.Offset
+
+	-- Both bars read 0 right now, so a column measured from the live value would
+	-- make these equal.
+	check(
+		"five reachable digits reserve more room than one",
+		wideWidth > narrowWidth,
+		("%d vs %d"):format(wideWidth, narrowWidth)
+	)
+
+	-- The suffix is part of the widest string, not an extra hung off the end.
+	local suffixed = Left:AddProgressBar("WidthSuffix", { Text = "w", Min = 0, Max = 9, Suffix = " units" })
+	check(
+		"and the suffix is reserved with them",
+		suffixed.Row:FindFirstChild("Readout").Size.X.Offset > narrowWidth,
+		suffixed.Row:FindFirstChild("Readout").Size.X.Offset
+	)
+
+	-- Label, track and readout are three columns, not two and an overlap.
+	check(
+		"the track stops short of both its neighbours",
+		-wide.Bar.Trough.Size.X.Offset >= wide.Label.Size.X.Offset + wideWidth,
+		("%d vs %d + %d"):format(-wide.Bar.Trough.Size.X.Offset, wide.Label.Size.X.Offset, wideWidth)
+	)
+
+	-- New bounds are new digits: SetMin / SetMax have to re-measure, not just
+	-- re-clamp, or the column keeps room for a value that can no longer occur.
+	wide:SetMax(9)
+	check(
+		"a narrower Max hands the column back",
+		wide.Row:FindFirstChild("Readout").Size.X.Offset == narrowWidth,
+		wide.Row:FindFirstChild("Readout").Size.X.Offset
+	)
+
+	narrow:Destroy()
+	wide:Destroy()
+	suffixed:Destroy()
+end)
+
+-- The defaults are the whole of what the two are SUPPOSED to disagree about.
+check("a slider carries no suffix by default", O.BareSlider.Suffix == "", O.BareSlider.Suffix)
+check("a progress bar carries a percent by default", O.BareBar.Suffix == "%", O.BareBar.Suffix)
+
+step("the two disagree about the starting value, deliberately", function()
+	local slider = Left:AddSlider("DefSlider", { Text = "d", Min = -50, Max = 50 })
+	local bar = Left:AddProgressBar("DefBar", { Text = "d", Min = -50, Max = 50 })
+	check("a slider with no Default sits at its Min", slider.Value == -50, slider.Value)
+	check("a progress bar with no Default sits at zero", bar.Value == 0, bar.Value)
+	slider:Destroy()
+	bar:Destroy()
+end)
+
+-- The bounds arithmetic, from the slider side. The bar's copy of these is above.
+check("a degenerate slider pins to its one value", O.Flat.Value == 5, O.Flat.Value)
+check("and paints nothing rather than dividing by a zero span", segmentsPainted(O.Flat, "Accent") == 0, segmentsPainted(O.Flat, "Accent"))
+
+step("a slider re-clamps on SetMin / SetMax", function()
+	local slider = Left:AddSlider("BoundSlider", { Text = "b", Default = 100, Min = 0, Max = 100 })
+	slider:SetMax(50)
+	check("slider value clamped by the new Max", slider.Value == 50, slider.Value)
+	slider:SetMin(60)
+	check("slider value pulled up to the new Min", slider.Value == 60, slider.Value)
+	check("an inverted range collapses instead of erroring", segmentsPainted(slider, "Accent") == 0, segmentsPainted(slider, "Accent"))
+	slider:Destroy()
+end)
+
+step("a slider re-measures its label column on SetText", function()
+	local slider = Left:AddSlider("TextSlider", { Text = "S", Min = 0, Max = 10 })
+	local narrow = slider.Label.Size.X.Offset
+	check("the track starts after the caption", slider.Bar.Trough.Position.X.Offset > narrow, slider.Bar.Trough.Position.X.Offset)
+
+	slider:SetText("A considerably longer slider caption")
+	check("a longer caption takes a wider column", slider.Label.Size.X.Offset > narrow, slider.Label.Size.X.Offset)
+	check("and pushes the track right", slider.Bar.Trough.Position.X.Offset > narrow, slider.Bar.Trough.Position.X.Offset)
+
+	slider:SetText("S")
+	check("and it measures back down again", slider.Label.Size.X.Offset == narrow, slider.Label.Size.X.Offset)
+	slider:Destroy()
+end)
+
+step("Compact is the slider's alone", function()
+	local slider = Left:AddSlider("CompactSlider", { Text = "Compact", Compact = true, Min = 0, Max = 10 })
+	check("a compact slider hides its label", slider.Label.Visible == false)
+	check("and gives the column back to the track", slider.Label.Size.X.Offset == 0, slider.Label.Size.X.Offset)
+	check("a progress bar always shows its label", O.Farm.Label.Visible == true)
+	slider:Destroy()
+end)
+
+step("a disabled slider dims its readout and its track", function()
+	local slider = Left:AddSlider("DimSlider", { Text = "d", Default = 100, Min = 0, Max = 100 })
+	local readout = slider.Row:FindFirstChild("Readout")
+	check("a full slider lights every cell", segmentsPainted(slider, "Accent") == slider.Segments, segmentsPainted(slider, "Accent"))
+
+	slider:SetDisabled(true)
+	check("disabled slider readout goes faint", readout.TextColor3 == Library:GetColor("FontFaint"), tostring(readout.TextColor3))
+	check("and the track drops to the dim accent", segmentsPainted(slider, "AccentDim") == slider.Segments, segmentsPainted(slider, "AccentDim"))
+
+	slider:SetDisabled(false)
+	check("re-enabled slider readout is dim again", readout.TextColor3 == Library:GetColor("FontDim"), tostring(readout.TextColor3))
+	check("and the track comes back to the accent", segmentsPainted(slider, "Accent") == slider.Segments, segmentsPainted(slider, "Accent"))
+	slider:Destroy()
+end)
+
+-- The interaction itself: the one thing a Slider has that a ProgressBar must
+-- not grow. Everything below reads the value off the element, so a hit target
+-- that stopped moving it cannot pass.
+step("a slider is dragged, and a progress bar cannot be", function()
+	local slider = Left:AddSlider("DragSlider", { Text = "drag", Default = 0, Min = 0, Max = 100 })
+	local readout = slider.Row:FindFirstChild("Readout")
+	local trough = slider.Bar.Trough
+
+	check("a slider has a hit target", slider.Hit ~= nil, "a Slider must be draggable")
+	check("the slider readout is dim at rest", readout.TextColor3 == Library:GetColor("FontDim"), tostring(readout.TextColor3))
+
+	-- Nothing lays anything out here, so the track is handed a rectangle to be
+	-- dragged across: 200 wide, starting at x = 100 in AbsolutePosition space.
+	trough.AbsolutePosition = Vector2.new(100, 200)
+	trough.AbsoluteSize = Vector2.new(200, Library.Sizes.Track)
+
+	-- Written out rather than taken from the library's own converter: a cursor
+	-- compared in the wrong space drags the value by one gui inset.
+	local guiInset = game:GetService("GuiService"):GetGuiInset()
+	local function cursorAt(x)
+		__setMouse(x + guiInset.X, 200 + guiInset.Y)
+	end
+
+	local press = Instance.new("InputObject")
+	press.UserInputType = Enum.UserInputType.MouseButton1
+	local move = Instance.new("InputObject")
+	move.UserInputType = Enum.UserInputType.MouseMovement
+
+	cursorAt(150) -- a quarter along the track
+	slider.Hit.InputBegan:Fire(press)
+	check("clicking the track jumps to that value", slider.Value == 25, slider.Value)
+	check("the readout brightens while dragging", readout.TextColor3 == Library:GetColor("Font"), tostring(readout.TextColor3))
+
+	-- Movement is tracked on the library signals rather than on the button, so a
+	-- drag has to survive the cursor leaving the row entirely.
+	cursorAt(900)
+	__UserInputService.InputChanged:Fire(move, false)
+	check("the drag continues outside the row", slider.Value == 100, slider.Value)
+
+	__UserInputService.InputEnded:Fire(press, false)
+	check("the readout drops back on release", readout.TextColor3 == Library:GetColor("FontDim"), tostring(readout.TextColor3))
+
+	cursorAt(150)
+	__UserInputService.InputChanged:Fire(move, false)
+	check("release ended the drag", slider.Value == 100, slider.Value)
+
+	-- The same gestures, at a bar that has no hit target to receive them.
+	local before = O.Farm.Value
+	local farmReadoutText = O.Farm.Row:FindFirstChild("Readout")
+	__UserInputService.InputChanged:Fire(move, false)
+	check("a progress bar ignores the cursor", O.Farm.Value == before, O.Farm.Value)
+	check("and its readout never brightens", farmReadoutText.TextColor3 == Library:GetColor("FontDim"), tostring(farmReadoutText.TextColor3))
+
+	slider:Destroy()
+	__setMouse(400, 300)
+end)
+
 check("section is not stored", O.Targeting == nil and T.Targeting == nil)
 step("section re-measures on SetText", function()
 	local before = SectionEl.Rule.Position.X.Offset

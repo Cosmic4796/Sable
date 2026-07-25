@@ -11,14 +11,15 @@ version for adding or editing an element.
 | `Base.lua` | — | **spine, frozen.** Shared element behaviour |
 | `init.lua` | — | **spine, frozen.** Installs `Add*` onto the container metatable |
 | `Track.lua` | — | not an element: the segmented bar Slider and ProgressBar share |
+| `Numeric.lua` | — | not an element: the label / track / readout row around that bar, and its arithmetic |
 | `Label.lua` | none | supports inline pickers via `element.Right` |
 | `Button.lua` | none | `:AddButton(...)` splits the row into equal columns |
 | `Divider.lua` | none | |
 | `Section.lua` | none | named rule; `:SetText` re-measures the caption |
 | `Paragraph.lua` | none | heading + wrapped body; row `AutomaticSize.Y`, reflows on width |
 | `Toggle.lua` | `Library.Toggles` | supports inline pickers via `element.Right` |
-| `Slider.lua` | `Library.Options` | segmented track — recolours, never resizes |
-| `ProgressBar.lua` | `Library.Options` | Slider's track and readout, read-only. **Not saved** |
+| `Slider.lua` | `Library.Options` | a `Numeric` row plus the interaction: hit target, drag, brightening readout |
+| `ProgressBar.lua` | `Library.Options` | the same `Numeric` row with none of it. **Not saved** |
 | `Input.lua` | `Library.Options` | |
 | `Dropdown.lua` | `Library.Options` | single, multi, searchable |
 | `ColorPicker.lua` | `Library.Options` | `New` + `Attach` |
@@ -69,8 +70,12 @@ Requires resolve through the bundler's shim, so the name is the full path under
   dropped by `Collect` and unmatchable by `Apply`. ProgressBar and Image sit in
   `Library.Options` and rely on that to stay out of config files — do not "fix"
   it by adding a case.
-- **One segmented bar.** Slider and ProgressBar both build theirs through
-  `elements/Track`. A second implementation would drift.
+- **One segmented bar, one numeric row.** Slider and ProgressBar build the bar
+  through `elements/Track` and everything around it — bounds, rounding, readout
+  width, the three columns, `:SetValue` / `:SetMin` / `:SetMax` / `:SetText` —
+  through `elements/Numeric`. Slider adds the interaction on top; ProgressBar
+  adds nothing. A second copy of either drifts the moment one is fixed alone, so
+  a fix belongs in the shared file even when only one of the two is misbehaving.
 
 ## Adding an element
 

@@ -36,7 +36,7 @@ local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmi
 
 local Window = Library:CreateWindow({
     Title = "Sable",
-    Footer = "sys 1.1",
+    Footer = "sys 1.2",
     Center = true,
     AutoShow = true,
 })
@@ -146,6 +146,11 @@ Library:SetKeybindVisibility(bool)
 Library:SetOpen(bool) / :Toggle() / :SetMenuKeybind("INS")
 Library:SetScheme("Accent", Color3.fromRGB(...))   -- live retheme
 Library:OnUnload(fn) / Library:Unload()
+
+-- Every connection you make should be handed over, so unloading takes it with
+-- it. Library.InputBegan / InputEnded / InputChanged / RenderStepped are the
+-- library's own signals, and a handler on one must bail on Library.Unloaded.
+Library:GiveSignal(Library.RenderStepped:Connect(function(delta) end))
 ```
 
 Menu hotkey defaults to `Insert`. Scrollbars are invisible until a column is
@@ -230,9 +235,9 @@ SaveManager:DecodeConfig(text)                   -- -> table?, reason?  (pure)
 ```
 
 The string is `SABLE1:` plus base64 of the JSON, compressed with a small LZW
-first — around **half** the length of the raw base64 for a real hub (a
-41-element config: 2411 characters of JSON, 3223 as plain base64, **1671** as a
-shared string). The compressed form is decoded and compared before it is handed
+first — around **half** the length of the raw base64 for a real hub (the example
+hub's 48-element config: 2918 characters of JSON, 3899 as plain base64, **1955**
+as a shared string). The compressed form is decoded and compared before it is handed
 out, so a string that cannot be read back is never produced; it falls back to
 the uncompressed form instead.
 
@@ -346,7 +351,7 @@ src/Signal.lua            pcall-isolated signals
 src/Theme.lua             palette, metrics, fonts, colour registry
 src/Window.lua            window / tab / groupbox / tabbox / dependency box
 src/Overlays.lua          watermark, notifications, keybind list
-src/elements/             Base + the thirteen controls (see src/elements/README.md)
+src/elements/             Base, two shared helpers, the thirteen controls (see src/elements/README.md)
 src/addons/               ThemeManager, SaveManager
 tools/                    build, verification, headless mock (see tools/README.md)
 examples/example.lua      full hub exercising every element

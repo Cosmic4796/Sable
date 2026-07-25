@@ -51,6 +51,117 @@ if window then
 \tcheck("settings tab is last", names[#names] == "Settings", names[#names])
 end
 
+-- Every element type, walked off the containers rather than off a list kept
+-- here. The example doubles as the tutorial, so a type that quietly stopped
+-- appearing in it is a type nobody is shown how to use. The Settings tab is
+-- excluded on purpose: those controls belong to AddSettingsTab, not to the
+-- example, and would cover for a hub that demonstrates nothing itself.
+local seen = {}
+local keyModes = {}
+local wrapped, split, doubleClick = false, false, false
+
+for _, tab in window.Tabs do
+\tif tostring(tab.Name) ~= "Settings" then
+\t\tfor _, box in tab.Boxes do
+\t\t\tif type(box.Elements) == "table" then
+\t\t\t\tfor _, element in box.Elements do
+\t\t\t\t\tseen[element.Type] = (seen[element.Type] or 0) + 1
+
+\t\t\t\t\tif element.Type == "Label" and element.Label and element.Label.TextWrapped then
+\t\t\t\t\t\twrapped = true
+\t\t\t\t\telseif element.Type == "Button" then
+\t\t\t\t\t\tif element.Group and #element.Group.Items > 1 then
+\t\t\t\t\t\t\tsplit = true
+\t\t\t\t\t\tend
+\t\t\t\t\t\tif element.DoubleClick == true then
+\t\t\t\t\t\t\tdoubleClick = true
+\t\t\t\t\t\tend
+\t\t\t\t\telseif element.Type == "KeyPicker" then
+\t\t\t\t\t\tkeyModes[element.Mode] = true
+\t\t\t\t\tend
+\t\t\t\tend
+\t\t\tend
+\t\tend
+\tend
+end
+
+local roster = {}
+for kind, count in seen do
+\ttable.insert(roster, kind .. " x" .. count)
+end
+table.sort(roster)
+print("elements: " .. table.concat(roster, ", "))
+
+for _, kind in {
+\t"Label", "Button", "Divider", "Section", "Paragraph", "Toggle", "Slider",
+\t"ProgressBar", "Input", "Dropdown", "ColorPicker", "KeyPicker", "Image",
+} do
+\tcheck("the example demonstrates " .. kind, (seen[kind] or 0) > 0)
+end
+
+check("a label that wraps", wrapped)
+check("a button that splits its row", split)
+check("a button that asks for a second click", doubleClick)
+for _, mode in { "Toggle", "Hold", "Always" } do
+\tcheck("a keybind in " .. mode .. " mode", keyModes[mode] == true)
+end
+
+-- The options that change what an element IS rather than what it holds.
+local O = Library.Options
+check("a searchable dropdown", O.AimbotPriority ~= nil and O.AimbotPriority.Searchable == true)
+check("a multi-select dropdown", O.ChamsParts ~= nil and type(O.ChamsParts.Value) == "table")
+check("a numeric input", O.TriggerHitChance ~= nil and O.TriggerHitChance.Value == "100", O.TriggerHitChance and O.TriggerHitChance.Value)
+check("an input that fires only when finished", O.TriggerWhitelist ~= nil)
+check("a compact slider", O.AimbotFOVOpacity ~= nil and O.AimbotFOVOpacity.Compact == true)
+check("a colour picker with an alpha bar", O.ChamsFill ~= nil and type(O.ChamsFill.Transparency) == "number")
+check("a colour picker without one", O.ChamsVisible ~= nil and O.ChamsVisible.Transparency == nil)
+check("two inline pickers on one toggle", O.AimbotFOVColor ~= nil and O.AimbotFOVKey ~= nil)
+check("an inline picker on a label", O.ChamsOutline ~= nil)
+check("a tabbox", O.Ambient ~= nil and O.FieldOfView ~= nil)
+check("a dependency box", O.AimbotFOVThickness ~= nil)
+
+-- A ProgressBar earns its place only if something drives it. The example walks
+-- it from RenderStepped, which is what makes it read as a readout rather than
+-- as a slider someone forgot to make draggable.
+check("the progress bar is not draggable", O.SessionProgress ~= nil and O.SessionProgress.Hit == nil)
+local walkedFrom = O.SessionProgress and O.SessionProgress.Value
+__RunService.RenderStepped:Fire(0.5)
+check(
+\t"the progress bar is driven live",
+\tO.SessionProgress ~= nil and O.SessionProgress.Value > walkedFrom,
+\tO.SessionProgress and O.SessionProgress.Value
+)
+
+-- Config sharing demonstrated in CODE, not only through the settings tab.
+local shareButton
+for _, tab in window.Tabs do
+\tfor _, box in tab.Boxes do
+\t\tif type(box.Elements) == "table" then
+\t\t\tfor _, element in box.Elements do
+\t\t\t\tif element.Type == "Button" and element.Text == "Copy my setup" then
+\t\t\t\t\tshareButton = element
+\t\t\t\tend
+\t\t\tend
+\t\tend
+\tend
+end
+check("a hub-built share control exists", shareButton ~= nil)
+if shareButton then
+\t-- Spied rather than merely run: a Func that errors nowhere still teaches
+\t-- nobody anything, and the button's TEXT is not evidence that the API
+\t-- underneath it was ever reached.
+\tlocal reachedCopyConfig = false
+\tlocal realCopyConfig = Library.SaveManager.CopyConfig
+\tLibrary.SaveManager.CopyConfig = function(manager, ...)
+\t\treachedCopyConfig = true
+\t\treturn realCopyConfig(manager, ...)
+\tend
+\tlocal ran = pcall(shareButton.Opts.Func)
+\tLibrary.SaveManager.CopyConfig = realCopyConfig
+\tcheck("and that button runs", ran)
+\tcheck("the example calls CopyConfig from code", reachedCopyConfig)
+end
+
 -- The controls AddSettingsTab is documented to create.
 check("MenuKeybind registered", Library.Options.MenuKeybind ~= nil)
 check("watermark toggle registered", Library.Toggles.SableWatermark ~= nil)

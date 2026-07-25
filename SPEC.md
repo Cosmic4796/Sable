@@ -23,6 +23,7 @@ src/
     Base.lua            element base          [SPINE - do not edit]
     init.lua            installer             [SPINE - do not edit]
     Track.lua           shared segmented bar (helper, not an element)
+    Numeric.lua         shared label/track/readout row (helper, not an element)
     Label.lua  Button.lua  Divider.lua
     Section.lua Paragraph.lua Image.lua
     Toggle.lua Slider.lua ProgressBar.lua Input.lua
@@ -144,6 +145,13 @@ inner insets, cell gutters and marker overhangs are all counted in hairlines.
   readout carries the exact value. There is exactly **one** implementation of it,
   `elements/Track`, shared by Slider and ProgressBar — a second segmented bar
   would drift out of step with the first.
+- **One numeric row** — the row *around* that bar is `elements/Numeric`, also
+  shared: the bounds arithmetic, the rounding, the readout sized for the widest
+  value it can ever show, and the three columns that keep the track between the
+  label and the readout. Slider layers a hit target, a drag and a readout that
+  brightens over it; ProgressBar layers nothing, which is the whole of what
+  makes one a control and the other a readout. Two copies of that row are a fix
+  to one of them waiting to leave the other behind.
 
 ---
 

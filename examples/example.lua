@@ -34,6 +34,8 @@ local Tabs = {
 
 local Aimbot = Tabs.Main:AddLeftGroupbox("Aimbot")
 
+-- A picker attached to a toggle renders inline, to the left of the toggle's own
+-- control. Hold mode: on for exactly as long as the key is down.
 Aimbot:AddToggle("AimbotEnabled", {
 	Text = "Enabled",
 	Default = false,
@@ -75,13 +77,47 @@ Aimbot:AddDropdown("AimbotBone", {
 	Default = 1,
 })
 
+-- Searchable puts a filter field above the list, which is what makes a long one
+-- usable. AllowNull lets a single-select dropdown be emptied again, and
+-- MaxVisibleDropdownItems caps how tall the popup grows before it scrolls.
+Aimbot:AddDropdown("AimbotPriority", {
+	Text = "Priority",
+	Values = {
+		"Closest to crosshair",
+		"Closest to camera",
+		"Lowest health",
+		"Highest threat",
+		"Most visible",
+		"Least recently hit",
+	},
+	Default = 1,
+	Searchable = true,
+	AllowNull = true,
+	MaxVisibleDropdownItems = 4,
+})
+
 Aimbot:AddDivider()
 
-Aimbot:AddToggle("AimbotShowFOV", { Text = "Draw FOV circle", Default = true })
-	:AddColorPicker("AimbotFOVColor", { Default = Color3.fromRGB(233, 161, 59), Title = "FOV circle" })
+-- One element can carry both inline pickers. :AddColorPicker returns the PICKER
+-- rather than the host, so two of them cannot be chained -- keep the toggle.
+local ShowFov = Aimbot:AddToggle("AimbotShowFOV", { Text = "Draw FOV circle", Default = true })
+ShowFov:AddColorPicker("AimbotFOVColor", { Default = Color3.fromRGB(233, 161, 59), Title = "FOV circle" })
+ShowFov:AddKeyPicker("AimbotFOVKey", { Default = "F2", Mode = "Toggle", Text = "FOV circle" })
 
+-- A dependency box is visible only while every pair it was given matches.
 local FovBox = Aimbot:AddDependencyBox()
 FovBox:AddSlider("AimbotFOVThickness", { Text = "Circle thickness", Default = 1, Min = 1, Max = 5, Rounding = 0 })
+-- Compact drops the label and gives the whole row to the track, for a value the
+-- row above has already named.
+FovBox:AddSlider("AimbotFOVOpacity", {
+	Text = "Circle opacity",
+	Default = 60,
+	Min = 0,
+	Max = 100,
+	Rounding = 0,
+	Suffix = "%",
+	Compact = true,
+})
 FovBox:SetupDependencies({ { Library.Toggles.AimbotShowFOV, true } })
 
 local Trigger = Tabs.Main:AddRightGroupbox("Triggerbot")
@@ -98,18 +134,36 @@ Trigger:AddSlider("TriggerDelay", {
 	Suffix = "ms",
 })
 
+-- Numeric keeps everything but digits out of the field. This one fires on every
+-- keystroke, which is the default.
+Trigger:AddInput("TriggerHitChance", {
+	Text = "Hit chance",
+	Default = "100",
+	Numeric = true,
+	MaxLength = 3,
+})
+
+-- Finished = true fires only on Enter or focus loss instead -- what a field
+-- someone types a whole sentence into wants.
 Trigger:AddInput("TriggerWhitelist", {
 	Text = "Ignore",
 	Placeholder = "player names, comma separated",
 	Finished = true,
 })
 
-Trigger:AddButton({
+-- :AddButton on a button splits the row into equal columns.
+local ResetTrigger = Trigger:AddButton({
 	Text = "Reset triggerbot",
 	Func = function()
 		Library.Options.TriggerDelay:SetValue(60)
 		Library.Toggles.TriggerEnabled:SetValue(false)
 		Library:Notify("Triggerbot reset", 3)
+	end,
+})
+ResetTrigger:AddButton({
+	Text = "Test",
+	Func = function()
+		Library:Notify({ Title = "Triggerbot", Description = "Fired once", Time = 3 })
 	end,
 })
 
@@ -161,6 +215,17 @@ Chams:AddDropdown("ChamsParts", {
 Chams:AddColorPicker("ChamsVisible", { Default = Color3.fromRGB(126, 176, 106), Title = "Visible" })
 Chams:AddColorPicker("ChamsHidden", { Default = Color3.fromRGB(226, 78, 63), Title = "Hidden" })
 
+-- Transparency = <number> adds an alpha bar to the popup and gives the picker a
+-- .Transparency field. Leave it nil and the picker is colour only.
+Chams:AddColorPicker("ChamsFill", {
+	Default = Color3.fromRGB(233, 161, 59),
+	Title = "Fill",
+	Transparency = 0.5,
+})
+
+-- A Label takes inline pickers too, for a colour with no toggle of its own.
+Chams:AddLabel("Outline"):AddColorPicker("ChamsOutline", { Default = Color3.fromRGB(52, 49, 44) })
+
 local WorldBox = Tabs.Visuals:AddRightTabbox()
 local WorldA = WorldBox:AddTab("World")
 WorldA:AddToggle("FullBright", { Text = "Fullbright", Default = false })
@@ -185,6 +250,11 @@ Movement:AddSlider("JumpValue", { Text = "Power", Default = 50, Min = 50, Max = 
 
 Movement:AddToggle("Noclip", { Text = "Noclip", Default = false, Risky = true })
 	:AddKeyPicker("NoclipKey", { Default = "N", Mode = "Toggle", Text = "Noclip" })
+
+-- The third bind mode. Hold is true while the key is down, Toggle flips on each
+-- press, and Always is simply on -- for a feature with no off switch. A picker
+-- added to a groupbox rather than to a toggle gets a row of its own.
+Movement:AddKeyPicker("AntiAfk", { Default = "None", Mode = "Always", Text = "Anti-AFK" })
 
 Movement:AddButton({ Text = "Reset character", Func = function()
 	Library:Notify({ Title = "Character", Description = "Respawn requested", Time = 3, Good = true })
@@ -226,13 +296,18 @@ Info:AddProgressBar("SessionProgress", {
 	Tooltip = "Driven by the script, not by the user",
 })
 
-Info:AddButton({
-	Text = "Advance progress",
-	Func = function()
-		local bar = Library.Options.SessionProgress
-		bar:SetValue(bar.Value >= bar.Max and 0 or bar.Value + 10)
-	end,
-})
+-- Driven live, so it is obvious this is a readout and not a slider: there is
+-- nothing to grab and the value moves on its own. Every RenderStepped handler
+-- must bail once the menu is unloaded -- the signal is the library's, and it
+-- outlives the elements it touches.
+local farmed = 0
+Library:GiveSignal(Library.RenderStepped:Connect(function(delta)
+	if Library.Unloaded then
+		return
+	end
+	farmed = farmed >= 100 and 0 or farmed + delta * 8
+	Library.Options.SessionProgress:SetValue(farmed)
+end))
 
 -- rbxasset:// paths are shipped with the client, so this one resolves without
 -- an upload. A hub would use rbxassetid://<id> for its own art.
@@ -261,6 +336,39 @@ Library:SetHudFolder("Sable/example")
 -- with the menu preferences already excluded from saved configs. It also
 -- restores the HUD layout saved by the last drag.
 Tabs.Settings = Window:AddSettingsTab()
+
+-- AddSettingsTab returns the tab, so a hub can keep adding to it.
+--
+-- Sharing is an API as well as the two buttons in the Configuration groupbox,
+-- and a hub is free to build its own front end for it:
+--
+--   local text, why = SaveManager:ExportConfig()          -- live values -> "SABLE1:..."
+--   local text, why = SaveManager:ExportConfig("legit")   -- a saved config instead
+--   local data, why = SaveManager:DecodeConfig(text)      -- pure: no elements, no files
+--   local ok,   why = SaveManager:ImportConfig(text)             -- apply it
+--   local ok,   why = SaveManager:ImportConfig(text, "friend")   -- apply it and save it
+--
+-- DecodeConfig never errors on a bad paste; it returns nil plus the reason, so
+-- a hub can word its own message instead of guessing.
+local Share = Tabs.Settings:AddRightGroupbox("Sharing")
+
+Share:AddButton({
+	Text = "Copy my setup",
+	Tooltip = "Exports the values on screen as one line of paste-safe text",
+	Func = function()
+		-- CopyConfig notifies on its own; the return values are for the hub. The
+		-- string comes back even when the clipboard is missing, which is the one
+		-- failure worth saying something else about.
+		local copied, text = SaveManager:CopyConfig()
+		Library:Notify({
+			Title = copied and "Shared" or "Not copied",
+			Description = text and (#text .. " characters, paste it to a friend") or "nothing to share",
+			Time = 4,
+			Good = copied,
+			Risk = not copied,
+		})
+	end,
+})
 
 -- Restores the theme picked with "set as default" on a previous run. Without
 -- this, that button appears to do nothing across sessions.
