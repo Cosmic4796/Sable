@@ -1,6 +1,6 @@
 # tools/
 
-Build and verification for Sable. Nothing here ships — `dist/Sable.lua` is the
+Build and verification for Sable. Nothing here ships — `Sable.lua` is the
 only artifact a user loads.
 
 ```
@@ -14,12 +14,16 @@ failure.
 
 | file | role |
 |------|------|
-| `build.py` | bundles `src/**/*.lua` → `dist/Sable.lua` + `dist/Sable.map.json` |
+| `build.py` | bundles `src/**/*.lua` → `Sable.lua` + `tools/Sable.map.json` |
 | `check.ps1` | the full gate: syntax → src typecheck → bundle typecheck → smoke |
 | `smoke.py` | assembles mock + bundle + test into one chunk and runs it under `luau` |
 | `mock_roblox.luau` | headless Roblox API mock |
 | `smoke_test.luau` | assertions run against the real bundle (`check.ps1` prints the count) |
 | `globalTypes.d.luau` | Roblox API type definitions for `luau-lsp` |
+| `gen_mock_api.py` | generates `mock_api.luau`: real per-class property names |
+| `mock_api.luau` | generated — what the mock accepts as a valid property write |
+| `run_example.py` | runs `examples/example.lua` headlessly and asserts its menu |
+| `bootstrap.ps1` | fetches the Luau toolchain and API definitions |
 
 ## The bundler
 
@@ -30,12 +34,12 @@ is `require("elements/init")`, *not* `require("elements")`. The shim does an exa
 table lookup with no directory resolution.
 
 Because bodies are copied verbatim, a line in the bundle maps back to source by a
-fixed per-module offset recorded in `dist/Sable.map.json`. To trace an analyzer or
+fixed per-module offset recorded in `tools/Sable.map.json`. To trace an analyzer or
 stack-trace line:
 
 ```python
 import json
-m = json.load(open('dist/Sable.map.json'))
+m = json.load(open('tools/Sable.map.json'))
 for name, info in m.items():
     if info['offset'] < line <= info['offset'] + info['lines']:
         print(info['path'], line - info['offset'])

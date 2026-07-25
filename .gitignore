@@ -7,8 +7,8 @@ tools/_example_combined.luau
 tools/luau/
 tools/globalTypes.d.luau
 
-# dist/ IS committed on purpose -- dist/Sable.lua is what the loadstring URL
-# serves, so it must be in the repo.
+# Sable.lua at the repo root IS committed on purpose -- it is the built bundle
+# the loadstring URL serves, so it must be in the repo.
 
 __pycache__/
 *.pyc

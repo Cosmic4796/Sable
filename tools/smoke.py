@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
-BUNDLE = ROOT / "dist" / "Sable.lua"
+BUNDLE = ROOT / "Sable.lua"
 OUT = TOOLS / "_smoke_combined.luau"
 
 EXE = ".exe" if os.name == "nt" else ""
@@ -30,7 +30,7 @@ def main() -> int:
         return 2
 
     if not BUNDLE.exists():
-        print("dist/Sable.lua missing - run tools/build.py first", file=sys.stderr)
+        print("Sable.lua missing - run tools/build.py first", file=sys.stderr)
         return 2
 
     # Generated property whitelist goes first; the mock reads it as a global.

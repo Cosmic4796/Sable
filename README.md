@@ -1,12 +1,9 @@
 # Sable
 
-A from-scratch Roblox UI library for executor script hubs. Linoria-shaped API,
-original code, and a deliberate visual identity: **tactical / instrument**.
-
-Warm dark grey, one amber accent, hard 1px hairlines, zero corner radius,
-uppercase letterspaced chrome, monospace numerals, corner ticks on the window
-frame, and a segmented slider track. It reads like equipment firmware, not a
-dashboard.
+A from-scratch UI library for Roblox script hubs. Linoria-shaped API, original
+code, and a visual identity that isn't a bootstrap theme: **tactical /
+instrument** — warm dark grey, one amber accent, hard 1px hairlines, zero corner
+radius, monospace throughout.
 
 ```
 ┌╴                                            ╶┐
@@ -29,36 +26,56 @@ dashboard.
  └───────────────────┘   └─────────────────────┘
 ```
 
+## Install
+
+```lua
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/Sable.lua"))()
+```
+
+One line. `ThemeManager` and `SaveManager` come attached — no extra loads.
+
+**Try it first:** paste this for a full demo hub with every control, config
+saving and themes.
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/examples/example.lua"))()
+```
+
 ## Quick start
 
 ```lua
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/dist/Sable.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/Sable.lua"))()
 
-local Window = Library:CreateWindow({
-    Title = "Sable",
-    Footer = "sys 1.2",
-    Center = true,
-    AutoShow = true,
-})
-
-local Tabs = { Main = Window:AddTab("Main") }
-local Box = Tabs.Main:AddLeftGroupbox("Aimbot")
+local Window = Library:CreateWindow({ Title = "Sable", Center = true, AutoShow = true })
+local Box = Window:AddTab("Main"):AddLeftGroupbox("Aimbot")
 
 Box:AddToggle("AimbotEnabled", { Text = "Enabled", Default = false })
    :AddKeyPicker("AimbotKey", { Default = "MB2", Mode = "Hold", Text = "Aimbot" })
 
 Box:AddSlider("AimbotFOV", { Text = "FOV", Default = 120, Min = 0, Max = 500 })
 
+Window:AddSettingsTab()   -- themes, configs, keybind, unload — all wired
+
 -- Read values anywhere:
-if Toggles.AimbotEnabled.Value and Options.AimbotKey:GetState() then
-    -- ...
-end
+if Toggles.AimbotEnabled.Value and Options.AimbotKey:GetState() then end
 ```
 
-`Toggles`, `Options` and `Sable` are exported to `getgenv()`, and are also
-available as `Library.Toggles` / `Library.Options`.
+`Toggles`, `Options` and `Sable` are exported to `getgenv()`, and are also on
+`Library.Toggles` / `Library.Options`.
 
-A full hub exercising every element is in [`examples/example.lua`](examples/example.lua).
+Menu hotkey is **Insert**.
+
+## What you get
+
+| | |
+|---|---|
+| **13 controls** | toggles, sliders, dropdowns, colour/key pickers, inputs, progress bars, images, sections, paragraphs |
+| **Settings tab in one call** | `Window:AddSettingsTab()` — themes, configs, keybind, unload |
+| **6 themes + your own** | save named themes, set one as your startup default |
+| **Shareable configs** | copy a config to your clipboard as one line, paste someone else's in |
+| **Draggable HUD** | move the watermark and keybind list anywhere, position remembered |
+| **Quiet scrollbars** | invisible until you scroll or hover |
+| **Clean unload** | every connection tracked and torn down |
 
 ## Elements
 
@@ -66,35 +83,65 @@ A full hub exercising every element is in [`examples/example.lua`](examples/exam
 Groupbox:AddLabel(text, doesWrap)
 Groupbox:AddButton({ Text, Func, DoubleClick, Tooltip, Disabled })
 Groupbox:AddDivider()
-Groupbox:AddSection(text)                 -- named rule; breaks up a long groupbox
-Groupbox:AddParagraph(title, body)        -- heading + wrapped copy, row grows to fit
+Groupbox:AddSection(text)                  -- named rule, breaks up a long groupbox
+Groupbox:AddParagraph(title, body)         -- heading + wrapped copy, grows to fit
 
-Groupbox:AddToggle(idx, { Text, Default, Tooltip, DisabledTooltip,
-                          Risky, Disabled, Visible, Callback })
-Groupbox:AddSlider(idx, { Text, Default, Min, Max, Rounding, Suffix,
-                          Compact, Segments, Callback })
-Groupbox:AddProgressBar(idx, { Text, Default, Min, Max, Rounding, Suffix,
-                               Segments, Tooltip })      -- read-only
-Groupbox:AddInput(idx,  { Text, Default, Placeholder, Numeric, Finished,
-                          ClearTextOnFocus, MaxLength, Callback })
-Groupbox:AddDropdown(idx, { Text, Values, Default, Multi, AllowNull,
-                            MaxVisibleDropdownItems, Searchable, Callback })
-Groupbox:AddColorPicker(idx, { Default, Title, Transparency, Callback })
-Groupbox:AddKeyPicker(idx, { Default, Text, Mode, SyncToggleState, NoUI,
-                             Callback, ChangedCallback })
-Groupbox:AddImage(idx, { Image, Height, ScaleType, Transparency, Tooltip })
+Groupbox:AddToggle(idx, opts)
+Groupbox:AddSlider(idx, opts)
+Groupbox:AddInput(idx, opts)
+Groupbox:AddDropdown(idx, opts)
+Groupbox:AddColorPicker(idx, opts)
+Groupbox:AddKeyPicker(idx, opts)
+Groupbox:AddProgressBar(idx, opts)         -- read-only
+Groupbox:AddImage(idx, opts)               -- read-only
 ```
 
-**Read-only elements.** `AddProgressBar` wears the slider's segmented track and
-readout with the interaction taken out — no drag, no hit target, a readout that
-never brightens. `AddImage` frames one `ImageLabel` in a hairline panel. Both are
-registered in `Options` so a script can drive them by index
-(`Options.Farm:SetValue(72)`, `Options.Banner:SetImage(id)`), and **neither is
-ever written to a config** — progress and artwork are runtime state, not
-settings. `AddSection` and `AddParagraph` hold no value at all.
+<details>
+<summary><b>Options for each</b></summary>
 
-Toggles and Labels accept inline pickers, which render to the left of the
-control on the same row:
+```lua
+AddToggle(idx, { Text, Default, Tooltip, DisabledTooltip, Risky, Disabled,
+                 Visible, Callback })
+
+AddSlider(idx, { Text, Default, Min, Max, Rounding, Suffix, Compact,
+                 Segments, Callback })
+
+AddInput(idx, { Text, Default, Placeholder, Numeric, Finished,
+                ClearTextOnFocus, MaxLength, Callback })
+
+AddDropdown(idx, { Text, Values, Default, Multi, AllowNull,
+                   MaxVisibleDropdownItems, Searchable, Callback })
+
+AddColorPicker(idx, { Default, Title, Transparency, Callback })
+
+AddKeyPicker(idx, { Default, Text, Mode, SyncToggleState, NoUI,
+                    Callback, ChangedCallback })   -- Mode: Toggle | Hold | Always
+
+AddProgressBar(idx, { Text, Default, Min, Max, Rounding, Suffix,
+                      Segments, Tooltip })
+
+AddImage(idx, { Image, Height, ScaleType, Transparency, Tooltip })
+```
+
+</details>
+
+Every element supports:
+
+```lua
+element.Value
+element:SetValue(value, silent)     -- silent = true skips callbacks
+element:OnChanged(fn, callNow)
+element:SetVisible(bool)  :SetDisabled(bool)  :SetText(text)
+element:SetTooltip(text, disabledText)
+element:Destroy()
+```
+
+Extras: `Slider`/`ProgressBar` `:SetMin/:SetMax` · `Dropdown:SetValues` ·
+`ColorPicker.Transparency` / `:SetValueRGB` · `KeyPicker:GetState()` /
+`:OnClick(fn)` / `.Mode` · `Paragraph:SetText(title, body)` / `:SetBody` ·
+`Image:SetImage(id)` / `:SetTransparency(n)` · `Button:AddButton(...)` splits the row.
+
+**Inline pickers.** Toggles and Labels take a colour or key picker on the same row:
 
 ```lua
 local esp = Box:AddToggle("Esp", { Text = "Boxes" })
@@ -102,61 +149,44 @@ esp:AddColorPicker("EspColor", { Default = Color3.fromRGB(233, 161, 59) })
 esp:AddKeyPicker("EspKey", { Default = "B", Mode = "Toggle" })
 ```
 
-`:AddColorPicker` / `:AddKeyPicker` return **the picker**, not the host, so a
-single one can be chained off `AddToggle` but two cannot be chained together —
-keep a reference to the toggle as above.
+These return **the picker**, not the host — so one can be chained off `AddToggle`,
+but two cannot be chained together. Keep a reference, as above.
 
-Every element supports:
+**Read-only elements.** `AddProgressBar` and `AddImage` live in `Options` so
+scripts can drive them (`Options.Farm:SetValue(72)`), but are **never written to
+a config** — progress and artwork are runtime state, not settings.
 
-```lua
-element.Value
-element:SetValue(value, silent)   -- silent = true skips callbacks
-element:OnChanged(fn, callNow)
-element:SetVisible(bool)
-element:SetDisabled(bool)
-element:SetText(text)
-element:SetTooltip(text, disabledText)
-element:Destroy()
-```
-
-Type-specific extras: `Slider:SetMin/SetMax`, `ProgressBar:SetMin/SetMax`,
-`Dropdown:SetValues`, `ColorPicker.Transparency` / `:SetValueRGB`,
-`KeyPicker:GetState()` / `:OnClick(fn)` / `.Mode`, `Paragraph:SetText(title,
-body)` / `:SetBody(body)`, `Image:SetImage(id)` / `:SetTransparency(n)`,
-`Button:AddButton(...)` (splits the row).
-
-### Containers
+## Containers
 
 ```lua
-Tab:AddLeftGroupbox(name) / Tab:AddRightGroupbox(name)
-Tab:AddLeftTabbox() / Tab:AddRightTabbox()   -- Tabbox:AddTab(name) -> Groupbox
+Tab:AddLeftGroupbox(name)  /  Tab:AddRightGroupbox(name)
+Tab:AddLeftTabbox()        /  Tab:AddRightTabbox()    -- Tabbox:AddTab(name) -> Groupbox
 
 local dep = Groupbox:AddDependencyBox()
 dep:AddSlider("Thickness", { ... })
-dep:SetupDependencies({ { Toggles.ShowFOV, true } })   -- visible only when all match
+dep:SetupDependencies({ { Toggles.ShowFOV, true } })  -- shown only when all match
 ```
 
-### Library
+## Library
 
 ```lua
-Library:CreateWindow(config)
-Library:Notify(textOrTable, duration)      -- { Title, Description, Time, Risk, Good }
-Library:SetWatermark(text) / :SetWatermarkVisibility(bool)
-Library:SetKeybindVisibility(bool)
-Library:SetOpen(bool) / :Toggle() / :SetMenuKeybind("INS")
-Library:SetScheme("Accent", Color3.fromRGB(...))   -- live retheme
-Library:OnUnload(fn) / Library:Unload()
-
--- Every connection you make should be handed over, so unloading takes it with
--- it. Library.InputBegan / InputEnded / InputChanged / RenderStepped are the
--- library's own signals, and a handler on one must bail on Library.Unloaded.
-Library:GiveSignal(Library.RenderStepped:Connect(function(delta) end))
+Library:CreateWindow({ Title, Footer, Center, AutoShow, Size, Position, Resizable })
+Library:Notify(textOrTable, duration)     -- { Title, Description, Time, Risk, Good }
+Library:SetWatermark(text)  :SetWatermarkVisibility(bool)  :SetKeybindVisibility(bool)
+Library:SetOpen(bool)  :Toggle()  :SetMenuKeybind("INS")
+Library:SetScheme("Accent", Color3.fromRGB(...))    -- live retheme
+Library:OnUnload(fn)  :Unload()
 ```
 
-Menu hotkey defaults to `Insert`. Scrollbars are invisible until a column is
-scrolled or hovered — set `Library.QuietScrollbars = false` before `CreateWindow`
-for a constant faint bar, or call `Library:QuietScrollbar(frame)` on your own
-`ScrollingFrame`.
+Hand every connection you make to the library so unloading takes it with you:
+
+```lua
+Library:GiveSignal(Library.RenderStepped:Connect(function(dt) end))
+```
+
+Scrollbars hide until scrolled or hovered. Set `Library.QuietScrollbars = false`
+before `CreateWindow` for a constant faint bar, or call
+`Library:QuietScrollbar(frame)` on your own `ScrollingFrame`.
 
 ## Themes and configs
 
@@ -164,231 +194,110 @@ for a constant faint bar, or call `Library:QuietScrollbar(frame)` on your own
 local ThemeManager, SaveManager = Library.ThemeManager, Library.SaveManager
 
 ThemeManager:SetFolder("Sable")
-SaveManager:SetFolder("Sable/mygame")
+SaveManager:SetFolder("Sable/mygame")     -- per-hub, so hubs don't collide
 
-Tabs.Settings = Window:AddSettingsTab()   -- name defaults to "Settings"
+Window:AddSettingsTab()                   -- builds the whole tab
 
 ThemeManager:LoadDefault()
 SaveManager:LoadAutoloadConfig()
 ```
 
-`Window:AddSettingsTab(name?)` is the recommended path. It creates the tab and
-fills it in:
+`AddSettingsTab()` creates a **Menu** groupbox (keybind, watermark and
+keybind-list toggles, reset HUD, unload), the **Theme** editor, and the
+**Configuration** section. It excludes menu preferences from saved configs, and
+leaves a folder you already chose alone.
 
-- a **Menu** groupbox — menu keybind (`Options.MenuKeybind`, wired to
-  `Library:SetMenuKeybind`), watermark and keybind-list toggles, a **Reset HUD
-  positions** button, and a double-click **Unload** button
-- the **Theme** editor (`ThemeManager:ApplyToTab`)
-- the **Configuration** section (`SaveManager:BuildConfigSection`)
+Built-in themes: **Sable** (amber), **Ember**, **Signal**, **Ice**, **Void**,
+**Mono**. All keep the warm dark base and move only the accent.
 
-and it excludes the three menu preferences plus every theme index from saved
-configs, so a config file carries game settings only. It appends to your ignore
-list rather than replacing it, and leaves a folder you already chose alone —
-call `:SetFolder` first, as above, or it defaults both managers to `"Sable"`.
-Returns the tab, so you can keep adding your own groupboxes to it.
-
-Built-in themes: **Sable** (default amber), **Ember**, **Signal**, **Ice**,
-**Void**, **Mono**. All keep the warm dark neutral base and only move the
-accent — the palette is a system, not a colour picker.
-
-### Saving your own themes
-
-The **Custom themes** groupbox writes whatever is on screen — preset plus any
-per-key edits — to a named file, and reads it back later:
+**Your own themes** — the Custom themes box saves whatever is on screen to a
+named file:
 
 ```lua
-ThemeManager:SaveCustomTheme("night ops")   -- <folder>/themes/night ops.json
+ThemeManager:SaveCustomTheme("night ops")
 ThemeManager:LoadCustomTheme("night ops")
-ThemeManager:DeleteCustomTheme("night ops")
-ThemeManager:CustomThemeList()              -- { "night ops", ... }, sorted
-ThemeManager:RefreshCustomThemeList()       -- re-read the folder into the UI
+ThemeManager:CustomThemeList()
 ```
 
-One JSON per theme, every colour a hex string. Picking a name from the dropdown
-loads it, and `:SetDefault()` accepts a saved theme as well as a preset, so your
-own theme can be the one that comes up on load. `default` is reserved — that is
-the pointer file `:SetDefault` writes.
+`:SetDefault()` accepts a saved theme, so yours can be the one that loads.
 
 ### Sharing a config
 
-Configs travel as one line of text, so a setup can be handed to someone else
-instead of read out slider by slider. The **Share** block at the bottom of the
-Configuration groupbox has a **COPY CONFIG** button, a field to paste into, and
-**IMPORT**:
-
-- **COPY CONFIG** copies the selected config — or, with nothing selected, the
-  values currently on screen — to the clipboard.
-- **IMPORT** applies whatever is in the paste field, and if the *config name*
-  field above is filled in, saves it under that name as well.
-
-Export copies; import reads a box. Reading the clipboard is not portable —
-`setclipboard` is near-universal among executors and a working `getclipboard` is
-not — so the paste is left to the user.
-
 ```lua
-local text = SaveManager:ExportConfig()          -- live values -> "SABLE1:..."
-local text = SaveManager:ExportConfig("legit")   -- a saved config instead
-SaveManager:CopyConfig()                         -- export + clipboard + notify
-SaveManager:ImportConfig(text)                   -- apply it
-SaveManager:ImportConfig(text, "from friend")    -- apply it and save it
-SaveManager:DecodeConfig(text)                   -- -> table?, reason?  (pure)
+SaveManager:CopyConfig()          -- to clipboard as "SABLE1:..."
+SaveManager:ImportConfig(text)    -- apply someone else's
+SaveManager:ExportConfig(name)    -- -> string
+SaveManager:DecodeConfig(text)    -- -> table, no side effects
 ```
 
-The string is `SABLE1:` plus base64 of the JSON, compressed with a small LZW
-first — around **half** the length of the raw base64 for a real hub (the example
-hub's 48-element config: 2918 characters of JSON, 3899 as plain base64, **1955**
-as a shared string). The compressed form is decoded and compared before it is handed
-out, so a string that cannot be read back is never produced; it falls back to
-the uncompressed form instead.
+One paste-safe line: base64 of an LZW-compressed payload. A 48-value config is
+~1900 characters. Export copies to the clipboard; import reads from a paste
+field — executors expose `setclipboard` reliably but not `getclipboard`.
 
-Import never errors on a bad paste, it explains: a missing `SABLE1:` prefix, a
-version this build does not read, damaged base64, a body cut short, unreadable
-JSON, and a string that decoded into something that is not a config all report
-their own reason through `Library:Notify`. Whitespace and line wrapping picked up
-in transit are ignored, and indexes this hub does not have are skipped.
-
-Both ends must be the same hub — a config is a list of element indexes, so a
-string from another script simply finds nothing to apply.
+Import never errors, only reports: bad prefix, unknown version, invalid base64,
+truncated payload, malformed JSON.
 
 ### Moving the HUD
 
-The watermark and the keybind list are dragged with the left mouse button
-**while the menu is open** — closed, they are inert and never intercept a click.
-Hovering either one turns its outline amber to say it can be grabbed. Neither
-can be dragged off screen, and both are pulled back into view if they grow or
-the viewport changes.
-
-Where they are put is remembered. The layout is saved when a drag ends and
-restored by `AddSettingsTab`:
+Drag the watermark and keybind list **while the menu is open** — closed, they
+ignore clicks entirely. Positions are saved when you let go.
 
 ```lua
-Library:SetHudFolder("Sable")   -- defaults to Library.Name
-Library:SaveHudLayout()         -- -> bool, writes <folder>/hud.json
-Library:LoadHudLayout()         -- -> bool, applies saved positions, clamped
-Library:ResetHudLayout()        -- back to the top left, then saves
-Library:GetHudLayout()          -- { Watermark = { X = , Y = }, KeybindList = { ... } }
+Library:SetHudFolder("Sable")
+Library:SaveHudLayout()  :LoadHudLayout()  :ResetHudLayout()
 ```
-
-Plain numbers, one small JSON file, and a missing or corrupt one falls back to
-the defaults without complaint. **Reset HUD positions** in the Menu groupbox is
-the recovery path if a panel ends up somewhere awkward.
-
-### Wiring it by hand
-
-Only worth it if you want a different layout or a subset of the controls. The
-managers are the same objects `AddSettingsTab` drives:
-
-```lua
-local Tab = Window:AddTab("Settings")
-
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
-
-ThemeManager:SetFolder("Sable")
-SaveManager:SetFolder("Sable/mygame")
-
-SaveManager:BuildConfigSection(Tab)   -- a tab, or a groupbox you built
-ThemeManager:ApplyToTab(Tab)
-SaveManager:LoadAutoloadConfig()
-```
-
-Configs are JSON under `<folder>/settings/`, themes under `<folder>/themes/`.
-Outside an executor every filesystem call degrades to a no-op instead of
-erroring, so the menu still runs in Studio.
 
 ## Porting a Linoria script
 
-Mostly mechanical:
-
 1. Replace the three `loadstring` lines with one, then
    `local ThemeManager, SaveManager = Library.ThemeManager, Library.SaveManager`.
-2. `Library:CreateWindow{}` config keys are the same; `Footer` replaces the
-   version text.
-3. Element constructors and the `Toggles` / `Options` globals are unchanged.
-4. Scheme keys accept the Linoria names as aliases — `MainColor`,
-   `BackgroundColor`, `AccentColor`, `OutlineColor`, `FontColor`, `RiskColor`
-   all map onto Sable's palette.
+2. Element constructors and the `Toggles` / `Options` globals are unchanged.
+3. Scheme keys accept the Linoria names — `MainColor`, `BackgroundColor`,
+   `AccentColor`, `OutlineColor`, `FontColor`, `RiskColor`.
+4. Optionally swap your hand-built settings tab for `Window:AddSettingsTab()`.
 
 ## Building
 
-Source lives in `src/` as separate modules; `tools/build.py` bundles them into
-the single loadstring artifact `dist/Sable.lua` (a local `require` shim, so
-module bodies are copied verbatim and line numbers map through
-`dist/Sable.map.json`).
+Source is in `src/`; `tools/build.py` bundles it into the single loadstring
+artifact `Sable.lua` at the repo root.
 
 ```
-powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1  # once, after cloning
-powershell -ExecutionPolicy Bypass -File tools/check.ps1      # everything
-python tools/build.py                                         # bundle only
-python tools/smoke.py                                         # headless run only
+powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1   # once, after cloning
+powershell -ExecutionPolicy Bypass -File tools/check.ps1       # the gate
 ```
 
-`bootstrap.ps1` fetches the Luau toolchain and Roblox API definitions into
-`tools/` (both gitignored). Nothing in `tools/` is needed to *use* Sable.
+`check.ps1` must print `ALL CLEAN`. It runs four gates:
 
-`check.ps1` is the one command that matters. It runs four gates and fails on any
-of them:
+1. **syntax** — `luau-compile` on every module
+2. **typecheck + lint** — `luau-lsp` against real Roblox API definitions
+3. **bundle** — the same, on the built artifact that actually ships
+4. **execution** — the bundle *runs* headlessly against a Roblox API mock,
+   currently **703 assertions**, plus the example hub
 
-| gate | tool | what it catches |
-|------|------|-----------------|
-| syntax | `luau-compile` | parse errors, per module |
-| src typecheck + lint | `luau-lsp` + `tools/globalTypes.d.luau` | wrong property names, bad enums, dead code |
-| bundle typecheck | same, on `dist/Sable.lua` | authoritative — it is what ships |
-| smoke | `luau` + `tools/mock_roblox.luau` | **runtime** faults: nil indexes, load order, config round-trips, teardown |
-
-The smoke gate is the important one. `tools/mock_roblox.luau` stands in for the
-Roblox API so `luau` can actually *execute* the built bundle headlessly — it
-constructs a menu with every element type, round-trips a config through JSON,
-applies every theme, and unloads. Typechecking cannot see any of that. See
-`tools/README.md`.
-
-## Layout
-
-```
-src/init.lua              root Library, ScreenGui, input signals, popup layer, primitives
-src/Util.lua              helpers: instances, colour, text, input naming, filesystem
-src/Signal.lua            pcall-isolated signals
-src/Theme.lua             palette, metrics, fonts, colour registry
-src/Window.lua            window / tab / groupbox / tabbox / dependency box
-src/Overlays.lua          watermark, notifications, keybind list
-src/elements/             Base, two shared helpers, the thirteen controls (see src/elements/README.md)
-src/addons/               ThemeManager, SaveManager
-tools/                    build, verification, headless mock (see tools/README.md)
-examples/example.lua      full hub exercising every element
-```
-
-`SPEC.md` is the internal build contract — read it before changing anything.
+See [`tools/README.md`](tools/README.md) for the harness, and
+[`docs/SPEC.md`](docs/SPEC.md) for the internal build contract.
 
 ## Notes
 
-- The ScreenGui takes a randomised name and is parented via `gethui()` when the
-  executor provides it, falling back to `CoreGui` then `PlayerGui`, and is run
-  through `syn.protect_gui` / `protect_gui` when available.
-- `AbsolutePosition` and `UserInputService:GetMouseLocation()` are **not** in the
-  same space, and no ScreenGui property makes them so: `AbsolutePosition` is
-  measured from just under the top bar, the cursor from the true top-left of the
-  screen. So **every hit test reads the cursor through `Util.MouseInGuiSpace()`**
-  (`GetMouseLocation() - GetGuiInset()`), never `Util.MousePosition()`. Raw
-  `Util.MousePosition()` is for drag deltas only, where a constant offset
-  cancels. Mixing the two errors nowhere — it just makes every hover and click
-  react one inset away from where the user aimed.
-- `IgnoreGuiInset` is `true`, so the gui spans the whole screen: a holder's local
-  `(0, 0)` is the true top of the screen, and an element inside it reports a
-  *negative* `AbsolutePosition.Y` up there. Anything that turns an
-  `AbsolutePosition` into a `Position` (the drag grab point, popup placement,
-  tooltip follow) subtracts the holder's own `AbsolutePosition` rather than
-  assuming it is zero.
-- Windows, popups and HUD panels may all be **parked** over the top bar; the HUD
-  and the notification stack still **start** below it
-  (`Util.GuiInsetOffset()`), since that corner is where Roblox draws its own
-  menu button. Nothing can be dragged off screen.
-- Every connection the library makes is tracked and torn down by
-  `Library:Unload()`.
 - **Callbacks do not fire on construction.** Building a menu would otherwise run
-  every callback in your script during layout. Use `:OnChanged(fn, true)` when
-  you want the initial value delivered. (Linoria differs here.)
-- **`AllowNull` governs single-select only.** A multi-select dropdown can always
-  be emptied — otherwise the last item could never be unchecked.
-- The watermark separator is ASCII `|`, not `│`: `Enum.Font.Code` has no
-  box-drawing glyphs and a missing one renders as tofu. It is a single named
-  constant in `src/Overlays.lua` if you want it changed.
+  every callback in your script during layout. Use `:OnChanged(fn, true)` if you
+  want the initial value delivered. (Linoria differs here.)
+- **`AllowNull` is single-select only.** A multi-select dropdown can always be
+  emptied, or the last item could never be unchecked.
+- The ScreenGui takes a randomised name, parents via `gethui()` when available
+  (falling back to `CoreGui`, then `PlayerGui`), and is run through
+  `syn.protect_gui` / `protect_gui` where present.
+- `IgnoreGuiInset` is `true`, but `AbsolutePosition` is measured from below the
+  top bar in **both** modes — so cursor comparisons go through
+  `Util.MouseInGuiSpace()`, which subtracts `GetGuiInset()`. Raw
+  `Util.MousePosition()` is for drag *deltas* only.
+- Everything degrades outside an executor: filesystem calls become no-ops, so
+  the menu still runs in Studio.
+
+## Status
+
+Verified by 703 headless assertions and full Roblox-API typechecking on every
+build. **Not yet tested in a live executor** — the harness proves logic, not
+pixels. Bug reports with a console error are very welcome.
+
+MIT licensed.

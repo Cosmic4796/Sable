@@ -3,8 +3,8 @@
 The thirteen controls, plus the shared base, the installer, and one shared
 drawing helper.
 
-`SPEC.md` §5 and §6 in the repo root are authoritative — this file is the short
-version for adding or editing an element.
+[`docs/SPEC.md`](../../docs/SPEC.md) §5 and §6 are authoritative — this file is
+the short version for adding or editing an element.
 
 | file | store | notes |
 |------|-------|-------|

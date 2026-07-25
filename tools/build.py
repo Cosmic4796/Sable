@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Bundle src/*.lua into a single loadstring-able dist/Sable.lua.
+"""Bundle src/*.lua into a single loadstring-able Sable.lua.
 
 Each module becomes `__modules["<name>"] = function() ... end` and `require` is
 a local shim, so module bodies are copied verbatim -- line numbers inside a
-module shift by a known offset, which is written to dist/Sable.map.json for
+module shift by a known offset, which is written to tools/Sable.map.json for
 mapping analyzer output back to source.
 
     python tools/build.py
@@ -18,9 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
-DIST = ROOT / "dist"
-OUT = DIST / "Sable.lua"
-MAP = DIST / "Sable.map.json"
+OUT = ROOT / "Sable.lua"
+MAP = ROOT / "tools" / "Sable.map.json"
 
 VERSION_RE = re.compile(r'^Library\.Version\s*=\s*"([^"]+)"', re.M)
 DIRECTIVE_RE = re.compile(r"^\s*--!\S+\s*$")
@@ -117,7 +116,6 @@ def main() -> int:
 
     chunks.append('\nreturn require("init")\n')
 
-    DIST.mkdir(parents=True, exist_ok=True)
     OUT.write_text("".join(chunks), encoding="utf-8", newline="\n")
     MAP.write_text(json.dumps(line_map, indent=2), encoding="utf-8", newline="\n")
 

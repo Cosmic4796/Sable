@@ -30,8 +30,8 @@ src/
     Dropdown.lua ColorPicker.lua KeyPicker.lua
   addons/
     ThemeManager.lua  SaveManager.lua
-tools/build.py          bundles src -> dist/Sable.lua
-dist/Sable.lua          single-file loadstring artifact
+tools/build.py          bundles src -> Sable.lua
+Sable.lua          single-file loadstring artifact
 ```
 
 Modules are bundled into one file by `tools/build.py`. Each file is wrapped in

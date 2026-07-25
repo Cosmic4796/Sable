@@ -6,7 +6,7 @@
 # 2. typechecks + lints each src module against real Roblox API definitions
 #    ("Unknown require" is filtered: modules are resolved by the bundle's
 #     require shim, which the analyzer cannot follow)
-# 3. rebuilds dist/Sable.lua and analyzes it -- this is the authoritative pass,
+# 3. rebuilds Sable.lua and analyzes it -- this is the authoritative pass,
 #    since it is the artifact that actually ships
 
 param(
@@ -79,7 +79,7 @@ if (-not $SkipBuild) {
     }
 
     Write-Host "`n== bundle typecheck + lint (authoritative) ==" -ForegroundColor Cyan
-    $dist = Join-Path $root 'dist\Sable.lua'
+    $dist = Join-Path $root 'Sable.lua'
     $bundleIssues = @(& $lsp analyze --definitions=$defs $dist 2>&1 |
         ForEach-Object { $_.ToString() } | Where-Object { -not (Test-Noise $_) } | Where-Object { $_.Trim() -ne '' })
     if ($bundleIssues.Count -eq 0) {

@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
-BUNDLE = ROOT / "dist" / "Sable.lua"
+BUNDLE = ROOT / "Sable.lua"
 EXAMPLE = ROOT / "examples" / "example.lua"
 OUT = TOOLS / "_example_combined.luau"
 

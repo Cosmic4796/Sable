@@ -5,11 +5,11 @@
 	wrong, the library is wrong.
 
 	Loading (pick one):
-		local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/dist/Sable.lua"))()
+		local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/Sable.lua"))()
 		local Library = loadstring(readfile("Sable.lua"))()   -- local copy
 ]]
 
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/dist/Sable.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cosmic4796/Sable/main/Sable.lua"))()
 
 local ThemeManager = Library.ThemeManager
 local SaveManager = Library.SaveManager
