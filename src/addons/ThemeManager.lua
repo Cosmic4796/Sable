@@ -106,8 +106,10 @@ ThemeManager.BuiltInThemes = {
 		PanelSunken = Color3.fromRGB(14, 11, 11),
 		Outline = Color3.fromRGB(57, 45, 43),
 		OutlineDim = Color3.fromRGB(40, 32, 30),
-		Accent = Color3.fromRGB(198, 64, 44),
-		AccentDim = Color3.fromRGB(106, 34, 23),
+		-- Brightened: a deep red carries little luminance, so the original sat at
+		-- 2.8:1 against the panel and read as muddy rather than lit.
+		Accent = Color3.fromRGB(228, 86, 58),
+		AccentDim = Color3.fromRGB(122, 46, 31),
 		Font = Color3.fromRGB(219, 209, 205),
 		FontDim = Color3.fromRGB(126, 114, 110),
 		FontFaint = Color3.fromRGB(86, 76, 73),
@@ -150,18 +152,21 @@ ThemeManager.BuiltInThemes = {
 		Black = Color3.fromRGB(0, 0, 0),
 	},
 
+	-- The violet has to carry real saturation or it reads as another grey against
+	-- the neutrals. The earlier value sat at 0.35 and looked like nothing had
+	-- happened when you picked it.
 	Void = {
-		Background = Color3.fromRGB(18, 16, 20),
-		Panel = Color3.fromRGB(26, 24, 30),
-		PanelRaised = Color3.fromRGB(34, 31, 38),
-		PanelSunken = Color3.fromRGB(13, 12, 15),
-		Outline = Color3.fromRGB(52, 48, 58),
-		OutlineDim = Color3.fromRGB(36, 33, 41),
-		Accent = Color3.fromRGB(148, 124, 190),
-		AccentDim = Color3.fromRGB(78, 64, 101),
-		Font = Color3.fromRGB(214, 209, 219),
-		FontDim = Color3.fromRGB(121, 116, 128),
-		FontFaint = Color3.fromRGB(82, 78, 88),
+		Background = Color3.fromRGB(16, 14, 21),
+		Panel = Color3.fromRGB(24, 21, 31),
+		PanelRaised = Color3.fromRGB(32, 28, 41),
+		PanelSunken = Color3.fromRGB(11, 10, 15),
+		Outline = Color3.fromRGB(51, 45, 65),
+		OutlineDim = Color3.fromRGB(35, 31, 45),
+		Accent = Color3.fromRGB(163, 112, 240),
+		AccentDim = Color3.fromRGB(88, 60, 130),
+		Font = Color3.fromRGB(215, 210, 224),
+		FontDim = Color3.fromRGB(122, 116, 134),
+		FontFaint = Color3.fromRGB(83, 78, 93),
 		Risk = Color3.fromRGB(226, 78, 63),
 		Good = Color3.fromRGB(126, 176, 106),
 		Black = Color3.fromRGB(0, 0, 0),
@@ -169,18 +174,22 @@ ThemeManager.BuiltInThemes = {
 
 	-- No hue at all: "on" is simply brighter than the text around it. Text is
 	-- pulled down a step so the accent still separates from a plain label.
+	-- With no hue to spend, "on" has to be signalled by BRIGHTNESS, so the accent
+	-- is pushed to near-white and Font pulled down to leave it room. The
+	-- neutrals also drop their warm tint -- previously they were byte-identical
+	-- to Sable, so picking Mono changed almost nothing on screen.
 	Mono = {
-		Background = Color3.fromRGB(18, 17, 15),
-		Panel = Color3.fromRGB(26, 25, 22),
-		PanelRaised = Color3.fromRGB(34, 32, 29),
-		PanelSunken = Color3.fromRGB(13, 12, 11),
-		Outline = Color3.fromRGB(52, 49, 44),
-		OutlineDim = Color3.fromRGB(36, 34, 30),
-		Accent = Color3.fromRGB(231, 227, 219),
-		AccentDim = Color3.fromRGB(122, 118, 111),
-		Font = Color3.fromRGB(199, 194, 186),
-		FontDim = Color3.fromRGB(118, 112, 103),
-		FontFaint = Color3.fromRGB(82, 77, 70),
+		Background = Color3.fromRGB(17, 17, 18),
+		Panel = Color3.fromRGB(25, 25, 27),
+		PanelRaised = Color3.fromRGB(33, 33, 36),
+		PanelSunken = Color3.fromRGB(12, 12, 13),
+		Outline = Color3.fromRGB(50, 50, 53),
+		OutlineDim = Color3.fromRGB(34, 34, 37),
+		Accent = Color3.fromRGB(246, 246, 249),
+		AccentDim = Color3.fromRGB(126, 126, 130),
+		Font = Color3.fromRGB(186, 186, 191),
+		FontDim = Color3.fromRGB(112, 112, 117),
+		FontFaint = Color3.fromRGB(78, 78, 82),
 		Risk = Color3.fromRGB(226, 78, 63),
 		Good = Color3.fromRGB(126, 176, 106),
 		Black = Color3.fromRGB(0, 0, 0),

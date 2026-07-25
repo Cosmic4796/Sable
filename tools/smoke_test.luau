@@ -1468,6 +1468,62 @@ step("BuiltInThemes present", function()
 	end
 	table.sort(themeNames)
 end)
+-- Every preset has to be VISIBLY a different theme and has to mark "on"
+-- distinguishably. Two shipped that did neither: Mono's neutrals were
+-- byte-identical to Sable's and its accent sat 56 units from the body text, so
+-- picking it looked like nothing happened. Numbers, so taste cannot drift.
+step("every built-in theme is usable", function()
+	local function luminance(c)
+		return 0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B
+	end
+	local function contrast(a, b)
+		local la, lb = luminance(a) + 0.05, luminance(b) + 0.05
+		if la < lb then
+			la, lb = lb, la
+		end
+		return la / lb
+	end
+	local function distance(a, b)
+		return math.sqrt((a.R - b.R) ^ 2 + (a.G - b.G) ^ 2 + (a.B - b.B) ^ 2) * 255
+	end
+
+	local NEUTRALS = { "Background", "Panel", "PanelRaised", "PanelSunken", "Outline", "OutlineDim" }
+
+	Library.ThemeManager:ApplyTheme("Sable")
+	local sable = {}
+	for key, value in Library.Scheme do
+		sable[key] = value
+	end
+
+	for _, name in themeNames do
+		Library.ThemeManager:ApplyTheme(name)
+		local scheme = Library.Scheme
+
+		check(
+			("%s: accent is distinct from body text"):format(name),
+			distance(scheme.Accent, scheme.Font) > 90,
+			("%.0f"):format(distance(scheme.Accent, scheme.Font))
+		)
+		check(
+			("%s: accent reads against the panel"):format(name),
+			contrast(scheme.Accent, scheme.Panel) > 3,
+			("%.2f:1"):format(contrast(scheme.Accent, scheme.Panel))
+		)
+
+		if name ~= "Sable" then
+			local moved = 0
+			for _, key in NEUTRALS do
+				if distance(sable[key], scheme[key]) > 0 then
+					moved += 1
+				end
+			end
+			check(("%s: shifts its neutrals, not just the accent"):format(name), moved >= 4, moved .. "/6")
+		end
+	end
+
+	Library.ThemeManager:ApplyTheme("Sable")
+end)
+
 check("has >= 5 built-in themes", #themeNames >= 5, table.concat(themeNames, ", "))
 step("apply every built-in theme", function()
 	for _, name in themeNames do

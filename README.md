@@ -257,38 +257,25 @@ powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1   # once, after clo
 powershell -ExecutionPolicy Bypass -File tools/check.ps1       # the gate
 ```
 
-`check.ps1` must print `ALL CLEAN`. It runs four gates:
+`check.ps1` must print `ALL CLEAN`. See [`tools/README.md`](tools/README.md) for
+the harness and [`docs/SPEC.md`](docs/SPEC.md) for the build contract.
 
-1. **syntax** — `luau-compile` on every module
-2. **typecheck + lint** — `luau-lsp` against real Roblox API definitions
-3. **bundle** — the same, on the built artifact that actually ships
-4. **execution** — the bundle *runs* headlessly against a Roblox API mock,
-   currently **703 assertions**, plus the example hub
-
-See [`tools/README.md`](tools/README.md) for the harness, and
-[`docs/SPEC.md`](docs/SPEC.md) for the internal build contract.
-
-## Notes
+## Good to know
 
 - **Callbacks do not fire on construction.** Building a menu would otherwise run
   every callback in your script during layout. Use `:OnChanged(fn, true)` if you
   want the initial value delivered. (Linoria differs here.)
 - **`AllowNull` is single-select only.** A multi-select dropdown can always be
-  emptied, or the last item could never be unchecked.
+  emptied — otherwise the last item could never be unchecked.
+- **Indexes are global.** `Toggles` and `Options` are keyed by the index string,
+  so two controls sharing one index will overwrite each other. Prefix them if
+  your hub is large.
+- **Configs store settings, not state.** Progress bars and images are never
+  written to a config file.
 - The ScreenGui takes a randomised name, parents via `gethui()` when available
   (falling back to `CoreGui`, then `PlayerGui`), and is run through
   `syn.protect_gui` / `protect_gui` where present.
-- `IgnoreGuiInset` is `true`, but `AbsolutePosition` is measured from below the
-  top bar in **both** modes — so cursor comparisons go through
-  `Util.MouseInGuiSpace()`, which subtracts `GetGuiInset()`. Raw
-  `Util.MousePosition()` is for drag *deltas* only.
-- Everything degrades outside an executor: filesystem calls become no-ops, so
+- Everything degrades outside an executor — filesystem calls become no-ops, so
   the menu still runs in Studio.
-
-## Status
-
-Verified by 703 headless assertions and full Roblox-API typechecking on every
-build. **Not yet tested in a live executor** — the harness proves logic, not
-pixels. Bug reports with a console error are very welcome.
 
 MIT licensed.
