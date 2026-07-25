@@ -206,10 +206,13 @@ Library:SetWatermark("SABLE")
 -- has not been chosen.
 ThemeManager:SetFolder("Sable")
 SaveManager:SetFolder("Sable/example")
+-- Where the dragged watermark / keybind list positions are remembered.
+Library:SetHudFolder("Sable/example")
 
 -- One call builds the whole tab: the Menu groupbox (keybind, watermark,
--- keybind list, unload), the theme editor and the config section, with the
--- menu preferences already excluded from saved configs.
+-- keybind list, HUD reset, unload), the theme editor and the config section,
+-- with the menu preferences already excluded from saved configs. It also
+-- restores the HUD layout saved by the last drag.
 Tabs.Settings = Window:AddSettingsTab()
 
 -- Restores the theme picked with "set as default" on a previous run. Without

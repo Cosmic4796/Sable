@@ -311,6 +311,292 @@ step("render frames", function()
 end)
 
 --==============================================================
+-- hud layout (independent placement, dragging, persistence)
+--==============================================================
+
+-- A shared UIListLayout owns its children's positions, which is exactly why
+-- neither panel could be dragged before. Assert the structure, not just the
+-- behaviour: re-introducing the column would break dragging silently.
+local HudHolder = Library.HudHolder
+local watermarkFrame = Library.Watermark
+local keybindFrame = Library.KeybindPanel
+
+local function hasListLayout(instance)
+	for _, child in instance:GetChildren() do
+		if child.ClassName == "UIListLayout" then
+			return true
+		end
+	end
+	return false
+end
+
+check("watermark is a direct child of HudHolder", watermarkFrame ~= nil and watermarkFrame.Parent == HudHolder)
+check("keybind panel is a direct child of HudHolder", keybindFrame ~= nil and keybindFrame.Parent == HudHolder)
+check("the two panels are separate instances", watermarkFrame ~= keybindFrame)
+check("no list layout owns the hud panels", not hasListLayout(HudHolder), "hud panels are back under a list layout")
+
+check("SetHudFolder installed", type(Library.SetHudFolder) == "function")
+check("SaveHudLayout installed", type(Library.SaveHudLayout) == "function")
+check("LoadHudLayout installed", type(Library.LoadHudLayout) == "function")
+check("ResetHudLayout installed", type(Library.ResetHudLayout) == "function")
+check("GetHudLayout installed", type(Library.GetHudLayout) == "function")
+check("HudFolder defaults to the library name", Library.HudFolder == Library.Name, Library.HudFolder)
+
+-- The mock reports one placeholder AbsoluteSize for every instance; give the
+-- holder and both panels real numbers so the clamp has edges to bite on.
+local VIEW_W, VIEW_H = 1920, 1080
+local MARK_W, MARK_H = 240, 26
+local BIND_W, BIND_H = 180, 60
+
+step("hud layout test viewport", function()
+	HudHolder.AbsoluteSize = Vector2.new(VIEW_W, VIEW_H)
+	watermarkFrame.AbsoluteSize = Vector2.new(MARK_W, MARK_H)
+	keybindFrame.AbsoluteSize = Vector2.new(BIND_W, BIND_H)
+	Library:SetHudFolder("SableSmoke/hud")
+	Library:ResetHudLayout()
+end)
+
+local hudDefaults = Library:GetHudLayout()
+check("layout is plain numbers", type(hudDefaults.Watermark) == "table" and type(hudDefaults.Watermark.X) == "number")
+check("watermark defaults to the top-left margin", hudDefaults.Watermark.X > 0 and hudDefaults.Watermark.Y > 0)
+check(
+	"keybind list defaults directly below the watermark",
+	hudDefaults.KeybindList.X == hudDefaults.Watermark.X and hudDefaults.KeybindList.Y > hudDefaults.Watermark.Y,
+	("%d,%d vs %d,%d"):format(
+		hudDefaults.Watermark.X, hudDefaults.Watermark.Y,
+		hudDefaults.KeybindList.X, hudDefaults.KeybindList.Y
+	)
+)
+
+step("out-of-range positions are clamped into the viewport", function()
+	Library.Util.FS.WriteJSON("SableSmoke/hud/hud.json", {
+		Watermark = { X = 99999, Y = -500 },
+		KeybindList = { X = -40, Y = 99999 },
+	})
+	check("LoadHudLayout applied the file", Library:LoadHudLayout() == true)
+end)
+
+local clamped = Library:GetHudLayout()
+check("clamped to the right edge", clamped.Watermark.X == VIEW_W - MARK_W, clamped.Watermark.X)
+check("clamped to the top edge", clamped.Watermark.Y == 0, clamped.Watermark.Y)
+check("clamped to the left edge", clamped.KeybindList.X == 0, clamped.KeybindList.X)
+check("clamped to the bottom edge", clamped.KeybindList.Y == VIEW_H - BIND_H, clamped.KeybindList.Y)
+check("frame position follows the layout", watermarkFrame.Position.X.Offset == clamped.Watermark.X)
+
+step("a panel that grows is pulled back into view", function()
+	keybindFrame.AbsoluteSize = Vector2.new(BIND_W, BIND_H * 4)
+	check(
+		"re-clamped after the content changed",
+		Library:GetHudLayout().KeybindList.Y == VIEW_H - BIND_H * 4,
+		Library:GetHudLayout().KeybindList.Y
+	)
+	keybindFrame.AbsoluteSize = Vector2.new(BIND_W, BIND_H)
+end)
+
+-- A re-clamp has to work from where the panel was PUT, never from the result of
+-- the previous clamp: clamping a clamp is a running minimum, so a panel parked
+-- against an edge creeps inward every time it grows and never comes back. The
+-- watermark changes width with every FPS digit, so this is the common case.
+step("a panel that shrinks again returns to where it was parked", function()
+	Library.Util.FS.WriteJSON("SableSmoke/hud/hud.json", {
+		Watermark = { X = 400, Y = 300 },
+		KeybindList = { X = 0, Y = VIEW_H - BIND_H },
+	})
+	Library:LoadHudLayout()
+	check("parked flush against the bottom", Library:GetHudLayout().KeybindList.Y == VIEW_H - BIND_H)
+
+	keybindFrame.AbsoluteSize = Vector2.new(BIND_W, BIND_H * 4)
+	check("growth pushed it up", Library:GetHudLayout().KeybindList.Y == VIEW_H - BIND_H * 4)
+
+	keybindFrame.AbsoluteSize = Vector2.new(BIND_W, BIND_H)
+	check(
+		"shrinking put it back where it was parked",
+		Library:GetHudLayout().KeybindList.Y == VIEW_H - BIND_H,
+		Library:GetHudLayout().KeybindList.Y
+	)
+end)
+
+step("hud positions round-trip through the file", function()
+	Library.Util.FS.WriteJSON("SableSmoke/hud/hud.json", {
+		Watermark = { X = 400, Y = 300 },
+		KeybindList = { X = 640, Y = 720 },
+	})
+	Library:LoadHudLayout()
+end)
+
+local moved = Library:GetHudLayout()
+check("loaded watermark position", moved.Watermark.X == 400 and moved.Watermark.Y == 300)
+check("loaded keybind position", moved.KeybindList.X == 640 and moved.KeybindList.Y == 720)
+
+step("SaveHudLayout writes plain numbers", function()
+	Library.Util.FS.Delete("SableSmoke/hud/hud.json")
+	check("SaveHudLayout reports success", Library:SaveHudLayout() == true)
+
+	local raw = Library.Util.FS.ReadJSON("SableSmoke/hud/hud.json")
+	check("hud.json was written", type(raw) == "table")
+	check("stored X is a number, not a UDim2", raw and type(raw.Watermark.X) == "number", raw and typeof(raw.Watermark.X))
+	check("stored value matches the layout", raw and raw.KeybindList.Y == 720, raw and raw.KeybindList.Y)
+end)
+
+step("a second folder clobbers the positions", function()
+	Library.Util.FS.WriteJSON("SableSmoke/hud2/hud.json", {
+		Watermark = { X = 10, Y = 10 },
+		KeybindList = { X = 20, Y = 20 },
+	})
+	Library:SetHudFolder("SableSmoke/hud2")
+	check("second layout applied", Library:LoadHudLayout() == true)
+	check("positions clobbered", Library:GetHudLayout().Watermark.X == 10)
+end)
+
+step("the saved layout loads back", function()
+	Library:SetHudFolder("SableSmoke/hud")
+	check("LoadHudLayout returns true", Library:LoadHudLayout() == true)
+end)
+
+local restored = Library:GetHudLayout()
+check("RT watermark position", restored.Watermark.X == 400 and restored.Watermark.Y == 300, restored.Watermark.X)
+check("RT keybind position", restored.KeybindList.X == 640 and restored.KeybindList.Y == 720, restored.KeybindList.Y)
+
+step("dragging a panel moves it and saves on release", function()
+	local handle = HudHolder:FindFirstChild("WatermarkDrag")
+	check("watermark has a drag handle", handle ~= nil)
+	if not handle then
+		return
+	end
+
+	Library:SetOpen(false)
+	check("handle is inert while the menu is closed", handle.Visible == false, "closed menu would swallow the click")
+
+	Library:SetOpen(true)
+	check("handle is live while the menu is open", handle.Visible == true)
+	check("handle covers the panel", handle.Size.X.Offset == MARK_W and handle.Size.Y.Offset == MARK_H)
+
+	local mouse = Vector2.new(500, 500)
+	__UserInputService.GetMouseLocation = function()
+		return mouse
+	end
+
+	local press = Instance.new("InputObject")
+	press.UserInputType = Enum.UserInputType.MouseButton1
+	handle.InputBegan:Fire(press)
+
+	mouse = Vector2.new(560, 540)
+	local move = Instance.new("InputObject")
+	move.UserInputType = Enum.UserInputType.MouseMovement
+	__UserInputService.InputChanged:Fire(move, false)
+
+	local dragged = Library:GetHudLayout()
+	check(
+		"panel followed the cursor",
+		dragged.Watermark.X == 460 and dragged.Watermark.Y == 340,
+		("%d,%d"):format(dragged.Watermark.X, dragged.Watermark.Y)
+	)
+	check("handle followed the panel", handle.Position.X.Offset == dragged.Watermark.X)
+	check("the other panel did not move", Library:GetHudLayout().KeybindList.X == 640)
+
+	-- Saving mid-drag would write a file per mouse-move; the release is the
+	-- only moment that should touch the filesystem.
+	Library.Util.FS.Delete("SableSmoke/hud/hud.json")
+	__UserInputService.InputChanged:Fire(move, false)
+	check("no save during the drag", Library.Util.FS.IsFile("SableSmoke/hud/hud.json") == false)
+
+	__UserInputService.InputEnded:Fire(press, false)
+	local saved = Library.Util.FS.ReadJSON("SableSmoke/hud/hud.json")
+	check("drag end saved the layout", type(saved) == "table" and saved.Watermark.X == dragged.Watermark.X)
+
+	-- Released: further movement must not drag the panel any more.
+	mouse = Vector2.new(900, 900)
+	__UserInputService.InputChanged:Fire(move, false)
+	check("release ended the drag", Library:GetHudLayout().Watermark.X == dragged.Watermark.X)
+
+	__UserInputService.GetMouseLocation = function()
+		return Vector2.new(400, 300)
+	end
+end)
+
+step("dragging is impossible while the menu is closed", function()
+	local handle = HudHolder:FindFirstChild("KeybindListDrag")
+	if not handle then
+		check("keybind list has a drag handle", false)
+		return
+	end
+
+	local before = Library:GetHudLayout().KeybindList.X
+	Library:SetOpen(false)
+
+	-- The cursor really does move between press and release; only the closed
+	-- menu should be stopping this.
+	local mouse = Vector2.new(100, 100)
+	__UserInputService.GetMouseLocation = function()
+		return mouse
+	end
+
+	local press = Instance.new("InputObject")
+	press.UserInputType = Enum.UserInputType.MouseButton1
+	handle.InputBegan:Fire(press)
+
+	mouse = Vector2.new(300, 400)
+	local move = Instance.new("InputObject")
+	move.UserInputType = Enum.UserInputType.MouseMovement
+	__UserInputService.InputChanged:Fire(move, false)
+	__UserInputService.InputEnded:Fire(press, false)
+
+	check("closed menu refuses the drag", Library:GetHudLayout().KeybindList.X == before, Library:GetHudLayout().KeybindList.X)
+
+	__UserInputService.GetMouseLocation = function()
+		return Vector2.new(400, 300)
+	end
+	Library:SetOpen(true)
+end)
+
+-- Press and release without moving is a click, not a drag. There is nothing to
+-- persist, and an executor's writefile is synchronous.
+step("a click that never became a drag writes nothing", function()
+	local handle = HudHolder:FindFirstChild("WatermarkDrag")
+	if not handle then
+		check("watermark still has a drag handle", false)
+		return
+	end
+
+	local before = Library:GetHudLayout().Watermark.X
+	Library.Util.FS.Delete("SableSmoke/hud/hud.json")
+
+	local press = Instance.new("InputObject")
+	press.UserInputType = Enum.UserInputType.MouseButton1
+	handle.InputBegan:Fire(press)
+	__UserInputService.InputEnded:Fire(press, false)
+
+	check("no file written for a click", Library.Util.FS.IsFile("SableSmoke/hud/hud.json") == false)
+	check("the panel did not move", Library:GetHudLayout().Watermark.X == before)
+end)
+
+step("corrupt hud.json degrades to whatever is on screen", function()
+	Library.Util.FS.Write("SableSmoke/hud/hud.json", "{not json")
+	local before = Library:GetHudLayout()
+	check("LoadHudLayout refuses garbage", Library:LoadHudLayout() == false)
+	check("positions untouched", Library:GetHudLayout().Watermark.X == before.Watermark.X)
+end)
+
+step("a missing hud.json degrades", function()
+	Library:SetHudFolder("SableSmoke/hud-nothing-here")
+	check("LoadHudLayout returns false", Library:LoadHudLayout() == false)
+	Library:SetHudFolder("SableSmoke/hud")
+end)
+
+step("ResetHudLayout restores and persists the defaults", function()
+	check("reset returns the library", Library:ResetHudLayout() == Library)
+end)
+
+local reset = Library:GetHudLayout()
+check("reset watermark", reset.Watermark.X == hudDefaults.Watermark.X and reset.Watermark.Y == hudDefaults.Watermark.Y)
+check("reset keybind list", reset.KeybindList.X == hudDefaults.KeybindList.X and reset.KeybindList.Y == hudDefaults.KeybindList.Y)
+check("reset moved the frame", watermarkFrame.Position.Y.Offset == hudDefaults.Watermark.Y)
+check(
+	"reset was saved",
+	(Library.Util.FS.ReadJSON("SableSmoke/hud/hud.json") or {}).Watermark.X == hudDefaults.Watermark.X
+)
+
+--==============================================================
 -- menu toggle + input
 --==============================================================
 
@@ -602,11 +888,55 @@ end)
 -- Runs last: it rebuilds ThemeManager.Objects / SaveManager.Objects against a
 -- new tab, so anything above that reads those would be looking at the wrong
 -- controls afterwards.
+-- A saved layout is only useful if something restores it, and AddSettingsTab is
+-- where that happens. Park a layout on disk, move the panels somewhere else,
+-- and let the tab build put them back.
+step("seed a saved hud layout, then clobber the live one", function()
+	Library.Util.FS.WriteJSON("SableSmoke/hud/hud.json", {
+		Watermark = { X = 300, Y = 200 },
+		KeybindList = { X = 300, Y = 260 },
+	})
+
+	Library:SetHudFolder("SableSmoke/hud2")
+	Library:LoadHudLayout()
+	check("live positions clobbered", Library:GetHudLayout().Watermark.X == 10)
+
+	Library:SetHudFolder("SableSmoke/hud")
+end)
+
 local settingsTab
 step("AddSettingsTab", function()
 	settingsTab = Window:AddSettingsTab()
 end)
 drain()
+
+local afterSettings = Library:GetHudLayout()
+check("settings tab restored the saved hud layout", afterSettings.Watermark.X == 300, afterSettings.Watermark.X)
+check("restored both panels", afterSettings.KeybindList.Y == 260, afterSettings.KeybindList.Y)
+
+local resetButton
+step("find the Reset HUD positions button", function()
+	for _, box in settingsTab.Boxes do
+		if type(box.Elements) == "table" then
+			for _, element in box.Elements do
+				if element.Type == "Button" and element.Text == "Reset HUD positions" then
+					resetButton = element
+				end
+			end
+		end
+	end
+	check("settings tab offers a HUD reset", resetButton ~= nil)
+end)
+
+step("the reset button moves the panels home", function()
+	if not resetButton then
+		return
+	end
+	resetButton.Hit.MouseButton1Click:Fire()
+	drain()
+	check("button reset the layout", Library:GetHudLayout().Watermark.X == hudDefaults.Watermark.X)
+	check("button persisted the reset", (Library.Util.FS.ReadJSON("SableSmoke/hud/hud.json") or {}).Watermark.Y == hudDefaults.Watermark.Y)
+end)
 
 check("settings tab returned", type(settingsTab) == "table")
 check("settings tab named", settingsTab and settingsTab.Name == "Settings", settingsTab and settingsTab.Name)
@@ -684,6 +1014,19 @@ check("CapturingInput reset", Library.CapturingInput == false)
 
 step("Notify after unload is a no-op", function()
 	Library:Notify("should not error", 1)
+end)
+step("hud layout api no-ops after unload", function()
+	check("SaveHudLayout returns false", Library:SaveHudLayout() == false)
+	check("LoadHudLayout returns false", Library:LoadHudLayout() == false)
+	check("ResetHudLayout is inert", Library:ResetHudLayout() == Library)
+	check("GetHudLayout still answers", type(Library:GetHudLayout().Watermark) == "table")
+	check("SetHudFolder still answers", Library:SetHudFolder("SableSmoke/after-unload") == Library)
+end)
+step("a stray drag release after unload does not save", function()
+	local press = Instance.new("InputObject")
+	press.UserInputType = Enum.UserInputType.MouseButton1
+	__UserInputService.InputEnded:Fire(press, false)
+	check("nothing written after unload", Library.Util.FS.IsFile("SableSmoke/after-unload/hud.json") == false)
 end)
 step("Unload is idempotent", function()
 	Library:Unload()

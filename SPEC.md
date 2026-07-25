@@ -336,6 +336,13 @@ Library:SetKeybindVisibility(bool)
 
 Library.KeybindList:Set(id, { Text=, Key=, Mode=, Active= })  -- create or update
 Library.KeybindList:Remove(id)
+
+Library.HudFolder                 -- defaults to Library.Name
+Library:SetHudFolder(path)
+Library:SaveHudLayout()  -> bool  -- writes <HudFolder>/hud.json
+Library:LoadHudLayout()  -> bool  -- applies saved positions, clamped
+Library:ResetHudLayout()          -- back to defaults, then saves
+Library:GetHudLayout()   -> { Watermark = {X=,Y=}, KeybindList = {X=,Y=} }
 ```
 
 Watermark sits in `HudHolder`, top-left, one line, monospace, with `Accent`
@@ -343,6 +350,32 @@ separators: `SABLE │ 142 FPS │ 38 MS │ 15:04:22`. It must survive the menu
 being closed. Notifications stack in `NotificationHolder` on
 `Library.NotifySide`, each a hairline panel with a 2px `Accent` (or `Risk`/
 `Good`) left edge bar, sliding in over `Motion.Slow`.
+
+### HUD placement
+
+The watermark and the keybind list are **independently positioned children of
+`HudHolder`** — never siblings under a shared `UIListLayout`, because a layout
+owns its children's positions and neither panel could then be dragged. Defaults
+put the watermark at a `GroupPad` margin and the keybind list one HUD gap below
+it, which is where the old column put them; hiding one no longer reflows the
+other.
+
+Each panel is dragged by a `Library:HitButton` that tracks its rectangle (a
+button inside the panel would be swept into that panel's own list layout). The
+handle exists **only while `Library.Toggled`** — closed, it must not swallow a
+click. Hovering it turns the panel's outline `Accent`; that is the entire
+affordance, no new colours and no cursor changes. Positions are clamped inside
+`HudHolder.AbsoluteSize` allowing for the panel's own `AbsoluteSize`, and
+re-clamped when either changes, since both panels auto-size. Every re-clamp
+works from where the panel was **put**, never from the result of the previous
+clamp — clamping a clamp is a running minimum, so a panel parked against an
+edge would creep inward each time it grew and never come back when it shrank.
+
+Positions persist as plain numbers in `<HudFolder>/hud.json` through `Util.FS` —
+never a `UDim2`, which `HttpService` cannot encode. A save happens when a drag
+**ends**, not per frame. A missing or corrupt file degrades silently to the
+defaults. `AddSettingsTab` calls `LoadHudLayout` after the addon folders are
+defaulted, and offers a **Reset HUD positions** button.
 
 ---
 

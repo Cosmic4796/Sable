@@ -2,9 +2,11 @@
 -- Sable :: Overlays
 --
 -- The chrome that lives outside the window: watermark, keybind list and the
--- notification stack. Watermark and keybind list share one auto-sizing column
--- in HudHolder, so hiding the watermark reflows the binds up for free. All of
--- it keeps rendering while the menu itself is closed.
+-- notification stack. The watermark and the keybind list are independently
+-- positioned children of HudHolder -- each is draggable while the menu is open
+-- and remembers where it was put, which a shared list layout could never allow.
+-- Hiding one therefore no longer reflows the other; they stay where the user
+-- parked them. All of it keeps rendering while the menu itself is closed.
 
 local Util = require("Util")
 
@@ -102,33 +104,348 @@ function Overlays.Install(Library)
 	end
 
 	--==============================================================
-	-- hud column
+	-- hud panels (independent placement, dragging, persistence)
 	--==============================================================
 
-	local hudColumn = Library:Create("Frame", {
-		Name = "Column",
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.fromOffset(HUD_MARGIN, HUD_MARGIN),
-		Size = UDim2.fromOffset(0, 0),
-		AutomaticSize = Enum.AutomaticSize.XY,
-		Parent = Library.HudHolder,
-	})
+	-- Deliberately not Library:MakeDraggable. That one is built for a window: it
+	-- closes any open popup on grab, drags whenever its handle is clicked, and
+	-- clamps by leaving a 48px sliver on screen. A HUD panel has no business
+	-- closing a dropdown, must never be draggable with the menu closed, and has
+	-- to stay WHOLLY on screen -- half a watermark is not a watermark.
+	local HUD_FILE = "hud.json"
 
-	Util.ListLayout(hudColumn, HUD_GAP)
+	-- Where each panel starts, in HudHolder pixels. The keybind list sits one
+	-- HUD gap under a watermark of the standard height, which is exactly where
+	-- the old shared list layout put it, so a first run looks unchanged.
+	local hudDefaults = {
+		Watermark = { X = HUD_MARGIN, Y = HUD_MARGIN },
+		KeybindList = { X = HUD_MARGIN, Y = HUD_MARGIN + WATERMARK_HEIGHT + HUD_GAP },
+	}
+
+	-- Live positions as plain numbers, which is also the saved form: HttpService
+	-- cannot encode a UDim2, and offsets are what the clamp works in anyway.
+	--
+	-- X/Y is where the panel actually sits -- already clamped, and what gets
+	-- saved. WantX/WantY is where it was PUT. Every re-clamp works from the
+	-- wanted position, never from the last clamped one: clamping the result of
+	-- the previous clamp is a running minimum, so a panel parked against an edge
+	-- would be shoved inward every time it grew and never come back when it
+	-- shrank. The watermark changes width with every FPS digit and the keybind
+	-- list with every bind, so that drift is not hypothetical.
+	local hudLayout = {}
+	for panelKey, default in hudDefaults do
+		hudLayout[panelKey] = { X = default.X, Y = default.Y, WantX = default.X, WantY = default.Y }
+	end
+
+	local hudPanels = {}
+
+	local dragPanel = nil
+	local dragOrigin = Vector2.zero
+	local dragStartX, dragStartY = 0, 0
+
+	--- NaN fails the self-comparison and 1e999 decodes to infinity; a clamp
+	--- catches neither, and both reach UDim2.fromOffset intact on the load that
+	--- runs before the holder has ever been measured.
+	local function finite(value)
+		return type(value) == "number" and value == value and value > -math.huge and value < math.huge
+	end
+
+	--- Keeps a panel wholly inside HudHolder, allowing for its own size.
+	local function clampToViewport(frame, x, y)
+		local viewport = Library.HudHolder.AbsoluteSize
+		-- Before the first frame the holder has no measured size; clamping
+		-- against it would collapse every panel onto the origin.
+		if viewport.X <= 0 or viewport.Y <= 0 then
+			return x, y
+		end
+
+		local size = frame.AbsoluteSize
+		return Util.Clamp(x, 0, math.max(0, viewport.X - size.X)),
+			Util.Clamp(y, 0, math.max(0, viewport.Y - size.Y))
+	end
+
+	--- The handle is a SIBLING of the panel, not a child: both panels drive a
+	--- UIListLayout over their own contents and a layout owns every child it can
+	--- see, so a button inside one would be dragged into the flow. It tracks the
+	--- panel's rectangle instead.
+	local function syncHandle(panel)
+		local size = panel.Frame.AbsoluteSize
+
+		panel.Handle.Position = panel.Frame.Position
+		panel.Handle.Size = UDim2.fromOffset(size.X, size.Y)
+		-- A hidden panel must not leave a live hit box behind, and a closed menu
+		-- must not swallow input at all.
+		panel.Handle.Visible = Library.Toggled == true and panel.Frame.Visible == true
+	end
+
+	local function applyHudPosition(panel)
+		local entry = hudLayout[panel.Key]
+		local x, y = clampToViewport(panel.Frame, entry.WantX, entry.WantY)
+
+		entry.X, entry.Y = math.floor(x), math.floor(y)
+		panel.Frame.Position = UDim2.fromOffset(entry.X, entry.Y)
+		syncHandle(panel)
+	end
+
+	--- Ends the gesture and pins the wanted position to where the panel actually
+	--- landed, so a throw at a corner does not leave an overshoot behind for the
+	--- next re-clamp to act on. Returns the panel's entry, or nil if no drag was
+	--- running.
+	local function endDrag()
+		local panel = dragPanel
+		dragPanel = nil
+		if not panel then
+			return nil
+		end
+
+		local entry = hudLayout[panel.Key]
+		entry.WantX, entry.WantY = entry.X, entry.Y
+		return entry
+	end
+
+	--- Makes `frame` an independently placed, draggable HUD panel. `stroke` is
+	--- the panel's outline, which goes Accent while the menu is open and the
+	--- cursor is over it -- the whole affordance that it can be moved.
+	local function registerHudPanel(key, frame, stroke)
+		local panel = {
+			Key = key,
+			Frame = frame,
+			Stroke = stroke,
+			-- Frames do not reliably receive clicks; the drag target is a button.
+			Handle = Library:HitButton(Library.HudHolder, {
+				Name = key .. "Drag",
+				Size = UDim2.fromOffset(0, 0),
+				Visible = false,
+			}),
+		}
+
+		table.insert(hudPanels, panel)
+		applyHudPosition(panel)
+
+		local function paintOutline(colorKey)
+			if stroke then
+				Library:Retheme(stroke, { Color = colorKey })
+			end
+		end
+
+		Library:GiveSignal(panel.Handle.MouseEnter:Connect(function()
+			if Library.Unloaded or not Library.Toggled then
+				return
+			end
+			paintOutline("Accent")
+		end))
+
+		Library:GiveSignal(panel.Handle.MouseLeave:Connect(function()
+			if Library.Unloaded then
+				return
+			end
+			paintOutline("Outline")
+		end))
+
+		Library:GiveSignal(panel.Handle.InputBegan:Connect(function(input)
+			if Library.Unloaded or not Library.Toggled then
+				return
+			end
+			if
+				input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch
+			then
+				return
+			end
+
+			dragPanel = panel
+			dragOrigin = Util.MousePosition()
+			dragStartX, dragStartY = hudLayout[key].X, hudLayout[key].Y
+		end))
+
+		-- Both panels auto-size, so their rectangle changes under them: a grown
+		-- keybind list parked at an edge has to be pulled back into view, and the
+		-- handle has to keep covering it.
+		Library:GiveSignal(frame:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+			if Library.Unloaded then
+				return
+			end
+			applyHudPosition(panel)
+		end))
+
+		Library:GiveSignal(frame:GetPropertyChangedSignal("Visible"):Connect(function()
+			if Library.Unloaded then
+				return
+			end
+			syncHandle(panel)
+
+			-- The handle disappears with the panel, so MouseLeave never lands on
+			-- it: a panel hidden under the cursor would come back amber, and the
+			-- accent means "on", never "here is some chrome".
+			if not frame.Visible then
+				paintOutline("Outline")
+			end
+		end))
+
+		return panel
+	end
+
+	Library:GiveSignal(Library.InputChanged:Connect(function(input)
+		if Library.Unloaded or not dragPanel then
+			return
+		end
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+
+		local delta = Util.MousePosition() - dragOrigin
+		local entry = hudLayout[dragPanel.Key]
+		entry.WantX = dragStartX + delta.X
+		entry.WantY = dragStartY + delta.Y
+		applyHudPosition(dragPanel)
+	end))
+
+	Library:GiveSignal(Library.InputEnded:Connect(function(input)
+		if not dragPanel then
+			return
+		end
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+
+		local entry = endDrag()
+		-- On the END of the gesture, and only when the panel actually moved: a
+		-- click that never became a drag has nothing to persist, and writing a
+		-- file per mouse-move would hammer the executor's filesystem.
+		if not Library.Unloaded and entry and (entry.X ~= dragStartX or entry.Y ~= dragStartY) then
+			Library:SaveHudLayout()
+		end
+	end))
+
+	Library:GiveSignal(Library.MenuToggled:Connect(function(open)
+		for _, panel in hudPanels do
+			-- Re-measure on open: a panel that has never been drawn reports a
+			-- zero size, and the handle would be an empty hit box.
+			syncHandle(panel)
+			if not open then
+				-- MouseLeave never arrives if the menu closes under the cursor.
+				if panel.Stroke then
+					Library:Retheme(panel.Stroke, { Color = "Outline" })
+				end
+			end
+		end
+
+		if not open then
+			endDrag()
+		end
+	end))
+
+	--- A resolution change moves the edges every panel is clamped against.
+	Library:GiveSignal(Library.HudHolder:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if Library.Unloaded then
+			return
+		end
+		for _, panel in hudPanels do
+			applyHudPosition(panel)
+		end
+	end))
+
+	Library.HudFolder = Library.Name
+
+	function Library:SetHudFolder(path)
+		if type(path) == "string" and path ~= "" then
+			self.HudFolder = path
+		end
+		return self
+	end
+
+	local function hudLayoutPath()
+		return ("%s/%s"):format(tostring(Library.HudFolder or Library.Name), HUD_FILE)
+	end
+
+	--- { Watermark = { X =, Y = }, KeybindList = { X =, Y = } } -- a copy, and
+	--- plain numbers, so a caller can neither corrupt the live table nor be
+	--- handed a datatype JSON refuses to encode.
+	function Library:GetHudLayout()
+		local out = {}
+		for key, entry in hudLayout do
+			out[key] = { X = entry.X, Y = entry.Y }
+		end
+		return out
+	end
+
+	function Library:SaveHudLayout()
+		if self.Unloaded or not Util.FS.Available() then
+			return false
+		end
+		if not Util.FS.EnsureFolder(self.HudFolder) then
+			return false
+		end
+		return Util.FS.WriteJSON(hudLayoutPath(), self:GetHudLayout()) == true
+	end
+
+	--- A missing or corrupt file degrades to "keep the defaults": a HUD that
+	--- refuses to appear is worse than one in the wrong place. Positions are
+	--- clamped on the way in, so a layout saved at another resolution -- or
+	--- hand-edited -- can never hide a panel off screen.
+	function Library:LoadHudLayout()
+		if self.Unloaded then
+			return false
+		end
+
+		local data = Util.FS.ReadJSON(hudLayoutPath())
+		if type(data) ~= "table" then
+			return false
+		end
+
+		local applied = false
+		for _, panel in hudPanels do
+			local saved = data[panel.Key]
+			if type(saved) == "table" then
+				local x, y = tonumber(saved.X), tonumber(saved.Y)
+				if finite(x) and finite(y) then
+					hudLayout[panel.Key].WantX = x
+					hudLayout[panel.Key].WantY = y
+					applyHudPosition(panel)
+					applied = true
+				end
+			end
+		end
+
+		return applied
+	end
+
+	function Library:ResetHudLayout()
+		if self.Unloaded then
+			return self
+		end
+
+		for _, panel in hudPanels do
+			local default = hudDefaults[panel.Key]
+			hudLayout[panel.Key].WantX = default.X
+			hudLayout[panel.Key].WantY = default.Y
+			applyHudPosition(panel)
+		end
+
+		self:SaveHudLayout()
+		return self
+	end
 
 	--==============================================================
 	-- watermark
 	--==============================================================
 
-	local watermark = Library:Panel({
+	local watermark, watermarkStroke = Library:Panel({
 		Name = "Watermark",
+		Position = UDim2.fromOffset(hudDefaults.Watermark.X, hudDefaults.Watermark.Y),
 		Size = UDim2.fromOffset(0, WATERMARK_HEIGHT),
 		AutomaticSize = Enum.AutomaticSize.X,
-		LayoutOrder = 1,
 		Hud = true,
-		Parent = hudColumn,
+		Parent = Library.HudHolder,
 	}, "Panel", "Outline")
+
+	registerHudPanel("Watermark", watermark, watermarkStroke)
 
 	Util.Padding(watermark, 0, WATERMARK_PAD_X, 0, WATERMARK_PAD_X)
 
@@ -256,18 +573,20 @@ function Overlays.Install(Library)
 	-- keybind list
 	--==============================================================
 
-	local keybindPanel = Library:Panel({
+	local keybindPanel, keybindStroke = Library:Panel({
 		Name = "Keybinds",
+		Position = UDim2.fromOffset(hudDefaults.KeybindList.X, hudDefaults.KeybindList.Y),
 		Size = UDim2.fromOffset(0, 0),
 		AutomaticSize = Enum.AutomaticSize.XY,
 		Visible = false,
-		LayoutOrder = 2,
 		Hud = true,
-		Parent = hudColumn,
+		Parent = Library.HudHolder,
 	}, "Panel", "Outline")
 
 	Util.Padding(keybindPanel, BIND_PAD_Y, BIND_PAD_X, BIND_PAD_Y, BIND_PAD_X)
 	Util.ListLayout(keybindPanel, BIND_ROW_GAP)
+
+	registerHudPanel("KeybindList", keybindPanel, keybindStroke)
 
 	local bindRows = {}
 	local bindCount = 0
@@ -604,6 +923,9 @@ function Overlays.Install(Library)
 	end
 
 	Library:OnUnload(function()
+		dragPanel = nil
+		table.clear(hudPanels)
+
 		for index = #notifications, 1, -1 do
 			dispose(notifications[index].Frame)
 			notifications[index] = nil

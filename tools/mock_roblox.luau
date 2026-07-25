@@ -451,7 +451,14 @@ local function newInstance(className)
 		__children = children,
 	}
 
-	local proxy = setmetatable({}, {
+	-- Declared before it is assigned ON PURPOSE: the metamethods below close over
+	-- `proxy`, and in `local proxy = setmetatable(...)` the local is not in scope
+	-- until after the statement, so the closures would capture a nil GLOBAL. That
+	-- silently handed __addChild(nil) to every parent, leaving GetChildren() /
+	-- FindFirstChild() / GetDescendants() permanently empty -- a mock that
+	-- answers "no children" to everything cannot catch a parenting mistake.
+	local proxy
+	proxy = setmetatable({}, {
 		__index = function(_, key)
 			if api[key] then
 				return api[key]

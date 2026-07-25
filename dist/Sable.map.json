@@ -1,96 +1,96 @@
 {
   "Overlays": {
     "offset": 28,
-    "lines": 622,
+    "lines": 944,
     "path": "src/Overlays.lua"
   },
   "Signal": {
-    "offset": 653,
+    "offset": 975,
     "lines": 88,
     "path": "src/Signal.lua"
   },
   "Theme": {
-    "offset": 744,
+    "offset": 1066,
     "lines": 302,
     "path": "src/Theme.lua"
   },
   "Util": {
-    "offset": 1049,
+    "offset": 1371,
     "lines": 788,
     "path": "src/Util.lua"
   },
   "Window": {
-    "offset": 1840,
-    "lines": 1051,
+    "offset": 2162,
+    "lines": 1078,
     "path": "src/Window.lua"
   },
   "addons/SaveManager": {
-    "offset": 2894,
+    "offset": 3243,
     "lines": 670,
     "path": "src/addons/SaveManager.lua"
   },
   "addons/ThemeManager": {
-    "offset": 3567,
+    "offset": 3916,
     "lines": 875,
     "path": "src/addons/ThemeManager.lua"
   },
   "elements/Base": {
-    "offset": 4445,
+    "offset": 4794,
     "lines": 240,
     "path": "src/elements/Base.lua"
   },
   "elements/Button": {
-    "offset": 4688,
+    "offset": 5037,
     "lines": 276,
     "path": "src/elements/Button.lua"
   },
   "elements/ColorPicker": {
-    "offset": 4967,
+    "offset": 5316,
     "lines": 734,
     "path": "src/elements/ColorPicker.lua"
   },
   "elements/Divider": {
-    "offset": 5704,
+    "offset": 6053,
     "lines": 45,
     "path": "src/elements/Divider.lua"
   },
   "elements/Dropdown": {
-    "offset": 5752,
+    "offset": 6101,
     "lines": 590,
     "path": "src/elements/Dropdown.lua"
   },
   "elements/Input": {
-    "offset": 6345,
+    "offset": 6694,
     "lines": 250,
     "path": "src/elements/Input.lua"
   },
   "elements/KeyPicker": {
-    "offset": 6598,
+    "offset": 6947,
     "lines": 666,
     "path": "src/elements/KeyPicker.lua"
   },
   "elements/Label": {
-    "offset": 7267,
+    "offset": 7616,
     "lines": 116,
     "path": "src/elements/Label.lua"
   },
   "elements/Slider": {
-    "offset": 7386,
+    "offset": 7735,
     "lines": 407,
     "path": "src/elements/Slider.lua"
   },
   "elements/Toggle": {
-    "offset": 7796,
+    "offset": 8145,
     "lines": 222,
     "path": "src/elements/Toggle.lua"
   },
   "elements/init": {
-    "offset": 8021,
+    "offset": 8370,
     "lines": 85,
     "path": "src/elements/init.lua"
   },
   "init": {
-    "offset": 8109,
+    "offset": 8458,
     "lines": 687,
     "path": "src/init.lua"
   }

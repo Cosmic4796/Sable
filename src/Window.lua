@@ -726,6 +726,26 @@ function Window.Install(Library)
 			end,
 		})
 
+		-- The recovery path for a panel dragged somewhere awkward -- or onto a
+		-- screen edge that the next session's resolution no longer has.
+		menu:AddButton({
+			Text = "Reset HUD positions",
+			Tooltip = "Move the watermark and keybind list back to the top left",
+			Func = function()
+				if type(Library.ResetHudLayout) ~= "function" then
+					return
+				end
+
+				Library:ResetHudLayout()
+				Library:Notify({
+					Title = "HUD",
+					Description = "Watermark and keybind list moved back to the top left",
+					Time = 4,
+					Good = true,
+				})
+			end,
+		})
+
 		menu:AddDivider()
 
 		menu:AddButton({
@@ -742,6 +762,13 @@ function Window.Install(Library)
 
 		defaultFolder(themeManager)
 		defaultFolder(saveManager)
+
+		-- After the folders settle, so a host script that pointed the HUD
+		-- somewhere of its own is read from there. Overlays is optional in a
+		-- stripped build, hence the guard.
+		if type(Library.LoadHudLayout) == "function" then
+			Library:LoadHudLayout()
+		end
 
 		if type(saveManager) == "table" then
 			-- Menu preferences belong to the person, not to the config. Both

@@ -153,8 +153,8 @@ SaveManager:LoadAutoloadConfig()
 fills it in:
 
 - a **Menu** groupbox — menu keybind (`Options.MenuKeybind`, wired to
-  `Library:SetMenuKeybind`), watermark and keybind-list toggles, and a
-  double-click **Unload** button
+  `Library:SetMenuKeybind`), watermark and keybind-list toggles, a **Reset HUD
+  positions** button, and a double-click **Unload** button
 - the **Theme** editor (`ThemeManager:ApplyToTab`)
 - the **Configuration** section (`SaveManager:BuildConfigSection`)
 
@@ -185,6 +185,29 @@ One JSON per theme, every colour a hex string. Picking a name from the dropdown
 loads it, and `:SetDefault()` accepts a saved theme as well as a preset, so your
 own theme can be the one that comes up on load. `default` is reserved — that is
 the pointer file `:SetDefault` writes.
+
+### Moving the HUD
+
+The watermark and the keybind list are dragged with the left mouse button
+**while the menu is open** — closed, they are inert and never intercept a click.
+Hovering either one turns its outline amber to say it can be grabbed. Neither
+can be dragged off screen, and both are pulled back into view if they grow or
+the viewport changes.
+
+Where they are put is remembered. The layout is saved when a drag ends and
+restored by `AddSettingsTab`:
+
+```lua
+Library:SetHudFolder("Sable")   -- defaults to Library.Name
+Library:SaveHudLayout()         -- -> bool, writes <folder>/hud.json
+Library:LoadHudLayout()         -- -> bool, applies saved positions, clamped
+Library:ResetHudLayout()        -- back to the top left, then saves
+Library:GetHudLayout()          -- { Watermark = { X = , Y = }, KeybindList = { ... } }
+```
+
+Plain numbers, one small JSON file, and a missing or corrupt one falls back to
+the defaults without complaint. **Reset HUD positions** in the Menu groupbox is
+the recovery path if a panel ends up somewhere awkward.
 
 ### Wiring it by hand
 
