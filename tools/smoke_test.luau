@@ -1,0 +1,574 @@
+--!nocheck
+-- Sable :: headless smoke test
+-- Runs against the real built bundle with tools/mock_roblox.luau standing in
+-- for the Roblox API. `Library` is injected by tools/smoke.py.
+--
+-- This does not check pixels. It checks that the library CONSTRUCTS, that
+-- values round-trip, and that teardown is clean -- the failures a typechecker
+-- cannot see.
+
+local passed, failed = 0, 0
+local failures = {}
+
+local function check(name, ok, detail)
+	if ok then
+		passed += 1
+	else
+		failed += 1
+		table.insert(failures, name .. (detail and ("  --  " .. tostring(detail)) or ""))
+	end
+end
+
+local function step(name, fn)
+	local ok, err = pcall(fn)
+	check(name, ok, err)
+	return ok
+end
+
+local drain = __drainDeferred
+
+--==============================================================
+-- construction
+--==============================================================
+
+check("library loaded", type(Library) == "table")
+check("version present", type(Library.Version) == "string")
+check("ThemeManager attached", type(Library.ThemeManager) == "table")
+check("SaveManager attached", type(Library.SaveManager) == "table")
+check("KeybindList installed", type(Library.KeybindList) == "table")
+check("Notify installed", type(Library.Notify) == "function")
+check("SetWatermark installed", type(Library.SetWatermark) == "function")
+
+local Window
+step("CreateWindow", function()
+	Window = Library:CreateWindow({
+		Title = "Sable",
+		Footer = "sys " .. Library.Version,
+		Center = true,
+		AutoShow = true,
+	})
+end)
+
+if not Window then
+	print(("SMOKE ABORTED: window construction failed\n  %s"):format(table.concat(failures, "\n  ")))
+	return
+end
+
+check("window registered", #Library.Windows == 1)
+check("window has SetVisible", type(Window.SetVisible) == "function")
+
+local Tabs = {}
+step("AddTab x3", function()
+	Tabs.Main = Window:AddTab("Main")
+	Tabs.Visuals = Window:AddTab("Visuals")
+	Tabs.Settings = Window:AddTab("Settings")
+end)
+
+local Left, Right
+step("groupboxes", function()
+	Left = Tabs.Main:AddLeftGroupbox("Aimbot")
+	Right = Tabs.Main:AddRightGroupbox("Misc")
+end)
+
+check("container shape .Container", Left and typeof(Left.Container) == "Instance")
+check("container shape .Elements", Left and type(Left.Elements) == "table")
+check("container shape :Resize", Left and type(Left.Resize) == "function")
+check("container shape .Library", Left and Left.Library == Library)
+
+--==============================================================
+-- every element type
+--==============================================================
+
+step("AddLabel", function()
+	Left:AddLabel("Plain label")
+	Left:AddLabel("A much longer label that has to wrap across more than one line", true)
+end)
+step("AddDivider", function()
+	Left:AddDivider()
+end)
+step("AddButton + sub-button", function()
+	local b = Left:AddButton({ Text = "Do thing", Func = function() end })
+	b:AddButton({ Text = "Other", Func = function() end })
+	Left:AddButton({ Text = "Dangerous", DoubleClick = true, Func = function() end })
+end)
+step("AddToggle", function()
+	Left:AddToggle("Enabled", { Text = "Enabled", Default = false, Tooltip = "master switch" })
+end)
+step("AddToggle risky + disabled", function()
+	Left:AddToggle("Risky", { Text = "Silent aim", Default = false, Risky = true })
+	Left:AddToggle("Off", { Text = "Unavailable", Default = false, Disabled = true, DisabledTooltip = "nope" })
+end)
+step("AddSlider", function()
+	Left:AddSlider("Fov", { Text = "FOV", Default = 120, Min = 0, Max = 500, Rounding = 0, Suffix = "px" })
+	Left:AddSlider("Smooth", { Text = "Smoothing", Default = 0.35, Min = 0, Max = 1, Rounding = 2 })
+end)
+step("AddSlider degenerate Min==Max", function()
+	Left:AddSlider("Flat", { Text = "Flat", Default = 5, Min = 5, Max = 5 })
+end)
+step("AddInput", function()
+	Right:AddInput("Name", { Text = "Name", Default = "hello", Placeholder = "type here" })
+	Right:AddInput("Num", { Text = "Count", Default = "10", Numeric = true, Finished = true })
+end)
+step("AddDropdown single", function()
+	Right:AddDropdown("Bone", { Text = "Bone", Values = { "Head", "Torso", "Root" }, Default = 1 })
+end)
+step("AddDropdown multi", function()
+	Right:AddDropdown("Parts", {
+		Text = "Parts",
+		Values = { "Head", "Torso", "Arms" },
+		Multi = true,
+		Default = { Head = true },
+	})
+end)
+step("AddDropdown empty values", function()
+	Right:AddDropdown("Empty", { Text = "Empty", Values = {}, AllowNull = true })
+end)
+step("AddColorPicker standalone", function()
+	Right:AddColorPicker("Col", { Default = Color3.fromRGB(233, 161, 59), Title = "Colour" })
+	Right:AddColorPicker("ColA", { Default = Color3.fromRGB(10, 20, 30), Transparency = 0 })
+end)
+step("AddKeyPicker standalone", function()
+	Right:AddKeyPicker("Bind", { Default = "F", Mode = "Toggle", Text = "Bind" })
+end)
+step("inline pickers on toggle", function()
+	local t = Left:AddToggle("Esp", { Text = "ESP", Default = true })
+	t:AddColorPicker("EspCol", { Default = Color3.fromRGB(1, 2, 3) })
+	t:AddKeyPicker("EspKey", { Default = "MB2", Mode = "Hold", Text = "ESP" })
+end)
+step("inline picker on label", function()
+	local l = Left:AddLabel("Tracer")
+	l:AddColorPicker("TracerCol", { Default = Color3.fromRGB(9, 9, 9) })
+end)
+step("options with NO optional keys", function()
+	Right:AddToggle("Bare", {})
+	Right:AddSlider("BareSlider", {})
+	Right:AddInput("BareInput", {})
+end)
+
+step("tabbox", function()
+	local tb = Tabs.Visuals:AddLeftTabbox()
+	local a = tb:AddTab("One")
+	local b = tb:AddTab("Two")
+	a:AddToggle("TabA", { Text = "A", Default = true })
+	b:AddSlider("TabB", { Text = "B", Default = 1, Min = 0, Max = 10 })
+end)
+
+step("dependency box", function()
+	local dep = Left:AddDependencyBox()
+	dep:AddSlider("DepSlider", { Text = "Thickness", Default = 1, Min = 1, Max = 5 })
+	dep:SetupDependencies({ { Library.Toggles.Esp, true } })
+end)
+
+drain()
+
+--==============================================================
+-- stores + values
+--==============================================================
+
+local T, O = Library.Toggles, Library.Options
+
+check("toggle in Toggles", T.Enabled ~= nil)
+check("toggle NOT in Options", O.Enabled == nil)
+check("slider in Options", O.Fov ~= nil)
+check("input in Options", O.Name ~= nil)
+check("dropdown in Options", O.Bone ~= nil)
+check("colorpicker in Options", O.Col ~= nil)
+check("keypicker in Options", O.Bind ~= nil)
+
+check("toggle default", T.Enabled and T.Enabled.Value == false)
+check("slider default", O.Fov and O.Fov.Value == 120)
+check("input default", O.Name and O.Name.Value == "hello")
+check("dropdown default resolved to string", O.Bone and O.Bone.Value == "Head")
+check("multi dropdown default is a set", O.Parts and type(O.Parts.Value) == "table" and O.Parts.Value.Head == true)
+check("keypicker default", O.Bind and O.Bind.Value == "F")
+check("colorpicker default", O.Col and typeof(O.Col.Value) == "Color3")
+
+local fired = {}
+step("OnChanged fires", function()
+	T.Enabled:OnChanged(function(v)
+		fired.toggle = v
+	end)
+	T.Enabled:SetValue(true)
+end)
+check("OnChanged delivered value", fired.toggle == true)
+check("toggle value applied", T.Enabled.Value == true)
+
+step("silent SetValue skips callback", function()
+	fired.toggle = nil
+	T.Enabled:SetValue(false, true)
+end)
+check("silent honoured", fired.toggle == nil, "callback ran despite silent = true")
+check("silent still applied value", T.Enabled.Value == false)
+
+step("slider clamps above max", function()
+	O.Fov:SetValue(99999)
+end)
+check("slider clamped to Max", O.Fov.Value == 500, O.Fov.Value)
+step("slider clamps below min", function()
+	O.Fov:SetValue(-99999)
+end)
+check("slider clamped to Min", O.Fov.Value == 0, O.Fov.Value)
+step("slider rounds", function()
+	O.Smooth:SetValue(0.126)
+end)
+check("slider rounding=2", math.abs(O.Smooth.Value - 0.13) < 1e-6, O.Smooth.Value)
+
+step("degenerate slider survives", function()
+	O.Flat:SetValue(3)
+end)
+
+step("dropdown SetValue string", function()
+	O.Bone:SetValue("Torso")
+end)
+check("dropdown value", O.Bone.Value == "Torso")
+step("dropdown SetValues drops stale selection", function()
+	O.Bone:SetValues({ "Head", "Root" })
+end)
+check("stale selection resolved", O.Bone.Value ~= "Torso", O.Bone.Value)
+
+step("multi dropdown SetValue set", function()
+	O.Parts:SetValue({ Head = true, Arms = true })
+end)
+check("multi set applied", O.Parts.Value.Arms == true)
+
+step("keypicker GetState", function()
+	local _ = O.Bind:GetState()
+end)
+check("keypicker GetState is boolean", type(O.Bind:GetState()) == "boolean")
+
+step("colorpicker SetValue", function()
+	O.Col:SetValue(Color3.fromRGB(255, 0, 0))
+end)
+check("colorpicker applied", math.abs(O.Col.Value.R - 1) < 1e-3)
+
+step("SetVisible / SetDisabled / SetText", function()
+	T.Risky:SetVisible(false)
+	T.Risky:SetVisible(true)
+	T.Risky:SetDisabled(true)
+	T.Risky:SetDisabled(false)
+	T.Risky:SetText("Renamed")
+end)
+
+--==============================================================
+-- registry hygiene (the bug class that was fixed)
+--==============================================================
+
+local before = #Library.Registry
+step("repeated SetDisabled does not grow registry", function()
+	for _ = 1, 25 do
+		T.Risky:SetDisabled(true)
+		T.Risky:SetDisabled(false)
+	end
+end)
+check("registry stable across 50 state flips", #Library.Registry == before, ("%d -> %d"):format(before, #Library.Registry))
+
+--==============================================================
+-- overlays
+--==============================================================
+
+step("Notify string", function()
+	Library:Notify("hello", 3)
+end)
+step("Notify table", function()
+	Library:Notify({ Title = "Title", Description = "Body", Time = 2, Risk = true })
+	Library:Notify({ Title = "Good", Description = "Body", Time = 2, Good = true })
+end)
+step("watermark", function()
+	Library:SetWatermark("SABLE")
+	Library:SetWatermarkVisibility(true)
+	Library:SetWatermarkVisibility(false)
+	Library:SetWatermarkVisibility(true)
+end)
+step("keybind visibility", function()
+	Library:SetKeybindVisibility(false)
+	Library:SetKeybindVisibility(true)
+end)
+step("KeybindList Set/Remove", function()
+	Library.KeybindList:Set("smoke", { Text = "Test", Key = "F", Mode = "Toggle", Active = true })
+	Library.KeybindList:Set("smoke", { Text = "Test", Key = "G", Mode = "Hold", Active = false })
+	Library.KeybindList:Remove("smoke")
+end)
+
+step("render frames", function()
+	for _ = 1, 5 do
+		__RunService.RenderStepped:Fire(1 / 60)
+	end
+end)
+
+--==============================================================
+-- menu toggle + input
+--==============================================================
+
+step("SetOpen toggles", function()
+	Library:SetOpen(false)
+	Library:SetOpen(true)
+	Library:Toggle()
+	Library:Toggle()
+end)
+check("CapturingInput starts false", Library.CapturingInput == false)
+
+-- The menu hotkey must actually respond to a real key press. Asserting only
+-- that SetOpen/Toggle work is what let a permanently dead default bind ship:
+-- Library.MenuKeybind was "INSERT" while Util.InputName reports "INS".
+local Util = Library.Util
+
+check("bind names canonicalise", Util.CanonicalName("INSERT") == "INS", Util.CanonicalName("INSERT"))
+check("canonical name is idempotent", Util.CanonicalName("INS") == "INS")
+check("title case canonicalises", Util.CanonicalName("Insert") == "INS", Util.CanonicalName("Insert"))
+check("KeyCodeFromName resolves non-canonical", Util.KeyCodeFromName("INSERT") ~= nil)
+check("KeyCodeFromName rejects nonsense", Util.KeyCodeFromName("NotAKey") == nil)
+
+local function pressKey(keyName)
+	local input = Instance.new("InputObject")
+	input.UserInputType = Enum.UserInputType.Keyboard
+	input.KeyCode = Enum.KeyCode[keyName]
+	__UserInputService.InputBegan:Fire(input, false)
+	__UserInputService.InputEnded:Fire(input, false)
+end
+
+check("InputName of Insert is INS", (function()
+	local input = Instance.new("InputObject")
+	input.UserInputType = Enum.UserInputType.Keyboard
+	input.KeyCode = Enum.KeyCode.Insert
+	return Util.InputName(input)
+end)() == "INS")
+
+step("menu hotkey responds to a real press", function()
+	Library:SetOpen(true)
+	local before = Library.Toggled
+	pressKey("Insert")
+	check("default menu keybind toggles the menu", Library.Toggled ~= before, "hotkey did nothing")
+	pressKey("Insert")
+	check("menu keybind toggles back", Library.Toggled == before)
+end)
+
+step("menu hotkey works when set with a non-canonical name", function()
+	Library:SetMenuKeybind("INSERT")
+	local before = Library.Toggled
+	pressKey("Insert")
+	check("non-canonical keybind still matches", Library.Toggled ~= before, "hotkey did nothing")
+	Library:SetMenuKeybind("INS")
+	Library:SetOpen(true)
+end)
+
+--==============================================================
+-- destroying a host must take its inline pickers with it
+--==============================================================
+
+step("host destroy cascades to inline pickers", function()
+	local box = Tabs.Main:AddRightGroupbox("Teardown")
+	local host = box:AddToggle("HostToggle", { Text = "Host", Default = false })
+	host:AddColorPicker("HostCol", { Default = Color3.fromRGB(1, 2, 3) })
+	host:AddKeyPicker("HostKey", { Default = "V", Mode = "Toggle", Text = "orphan" })
+
+	check("inline pickers registered", O.HostCol ~= nil and O.HostKey ~= nil)
+	host:Destroy()
+
+	check("host removed from store", T.HostToggle == nil)
+	check("inline ColorPicker removed from store", O.HostCol == nil, "orphaned ColorPicker")
+	check("inline KeyPicker removed from store", O.HostKey == nil, "orphaned KeyPicker")
+end)
+
+-- A destroyed bind must go quiet. Library signals are plain Lua signals, so
+-- destroying the instances does not disconnect the handlers on its own.
+step("destroyed KeyPicker stops firing", function()
+	local box = Tabs.Main:AddRightGroupbox("Ghost")
+	local hits = 0
+	local picker = box:AddKeyPicker("GhostKey", {
+		Default = "P",
+		Mode = "Toggle",
+		Text = "ghost",
+		Callback = function()
+			hits += 1
+		end,
+	})
+
+	pressKey("P")
+	local afterLive = hits
+	check("live bind fires", afterLive > 0, "bind never fired while alive")
+
+	picker:Destroy()
+	pressKey("P")
+	check("destroyed bind is silent", hits == afterLive, ("callback ran %d more time(s) after Destroy"):format(hits - afterLive))
+end)
+
+step("stray input does not error", function()
+	local input = Instance.new("InputObject")
+	input.UserInputType = Enum.UserInputType.Keyboard
+	input.KeyCode = Enum.KeyCode.J
+	__UserInputService.InputBegan:Fire(input, false)
+	__UserInputService.InputEnded:Fire(input, false)
+end)
+
+--==============================================================
+-- themes
+--==============================================================
+
+step("ThemeManager SetFolder", function()
+	Library.ThemeManager:SetFolder("SableSmoke")
+end)
+step("ThemeManager ApplyToTab", function()
+	Library.ThemeManager:ApplyToTab(Tabs.Settings)
+end)
+local themeNames = {}
+step("BuiltInThemes present", function()
+	for name in Library.ThemeManager.BuiltInThemes do
+		table.insert(themeNames, name)
+	end
+	table.sort(themeNames)
+end)
+check("has >= 5 built-in themes", #themeNames >= 5, table.concat(themeNames, ", "))
+step("apply every built-in theme", function()
+	for _, name in themeNames do
+		Library.ThemeManager:ApplyTheme(name)
+	end
+end)
+check("accent still a Color3 after theming", typeof(Library.Scheme.Accent) == "Color3")
+check("AccentDim still a Color3", typeof(Library.Scheme.AccentDim) == "Color3")
+
+step("live SetScheme", function()
+	Library:SetScheme("Accent", Color3.fromRGB(0, 255, 128))
+	Library:UpdateColorsUsingRegistry()
+end)
+
+--==============================================================
+-- config round-trip (the highest-risk path)
+--==============================================================
+
+step("SaveManager setup", function()
+	Library.SaveManager:SetFolder("SableSmoke/game")
+	Library.SaveManager:IgnoreThemeSettings()
+	Library.SaveManager:SetIgnoreIndexes({ "Bare" })
+	Library.SaveManager:BuildConfigSection(Tabs.Settings)
+end)
+
+-- Known state to save.
+step("seed state", function()
+	T.Enabled:SetValue(true)
+	O.Fov:SetValue(321)
+	O.Smooth:SetValue(0.42)
+	O.Name:SetValue("round-trip")
+	O.Bone:SetValue("Root")
+	O.Parts:SetValue({ Head = true, Arms = true })
+	O.Col:SetValue(Color3.fromRGB(12, 34, 56))
+	O.Bind:SetValue("MB2")
+	T.Bare:SetValue(true)
+end)
+
+step("Save config", function()
+	Library.SaveManager:Save("smoke")
+end)
+drain()
+
+-- Clobber everything.
+step("clobber state", function()
+	T.Enabled:SetValue(false)
+	O.Fov:SetValue(0)
+	O.Smooth:SetValue(0)
+	O.Name:SetValue("clobbered")
+	O.Bone:SetValue("Head")
+	O.Parts:SetValue({})
+	O.Col:SetValue(Color3.fromRGB(200, 200, 200))
+	O.Bind:SetValue("K")
+	T.Bare:SetValue(false)
+end)
+
+step("Load config", function()
+	Library.SaveManager:Load("smoke")
+end)
+drain()
+
+check("RT toggle", T.Enabled.Value == true, tostring(T.Enabled.Value))
+check("RT slider int", O.Fov.Value == 321, tostring(O.Fov.Value))
+check("RT slider decimal", math.abs(O.Smooth.Value - 0.42) < 1e-6, tostring(O.Smooth.Value))
+check("RT input", O.Name.Value == "round-trip", tostring(O.Name.Value))
+check("RT dropdown single", O.Bone.Value == "Root", tostring(O.Bone.Value))
+check(
+	"RT dropdown multi",
+	type(O.Parts.Value) == "table" and O.Parts.Value.Head == true and O.Parts.Value.Arms == true,
+	type(O.Parts.Value) == "table" and __jsonEncode(O.Parts.Value) or type(O.Parts.Value)
+)
+check("RT colorpicker", math.abs(O.Col.Value.R - 12 / 255) < 0.01, tostring(O.Col.Value))
+check("RT keypicker", O.Bind.Value == "MB2", tostring(O.Bind.Value))
+check("ignored index NOT restored", T.Bare.Value == false, "SetIgnoreIndexes did not exclude 'Bare'")
+
+-- The empty multi-select set: JSONEncode turns {} into "[]", which decodes as
+-- an array. If that is not handled, the value comes back the wrong shape.
+step("save/load with EMPTY multi set", function()
+	O.Parts:SetValue({})
+	Library.SaveManager:Save("emptyset")
+	O.Parts:SetValue({ Head = true })
+	Library.SaveManager:Load("emptyset")
+end)
+drain()
+check(
+	"RT empty multi set stays a table",
+	type(O.Parts.Value) == "table",
+	"got " .. type(O.Parts.Value)
+)
+check(
+	"RT empty multi set is actually empty",
+	type(O.Parts.Value) == "table" and next(O.Parts.Value) == nil,
+	type(O.Parts.Value) == "table" and __jsonEncode(O.Parts.Value) or "?"
+)
+
+step("config list refresh", function()
+	Library.SaveManager:RefreshConfigList()
+end)
+step("delete config", function()
+	Library.SaveManager:Delete("emptyset")
+end)
+step("load missing config degrades", function()
+	Library.SaveManager:Load("does-not-exist")
+end)
+step("LoadAutoloadConfig with none set", function()
+	Library.SaveManager:LoadAutoloadConfig()
+end)
+
+--==============================================================
+-- teardown
+--==============================================================
+
+local signalCount = #Library.Signals
+check("signals were tracked", signalCount > 0, signalCount)
+
+step("Unload", function()
+	Library:Unload()
+end)
+check("unloaded flag", Library.Unloaded == true)
+check("signals cleared", #Library.Signals == 0, #Library.Signals)
+check("windows cleared", #Library.Windows == 0)
+check("CapturingInput reset", Library.CapturingInput == false)
+
+step("Notify after unload is a no-op", function()
+	Library:Notify("should not error", 1)
+end)
+step("Unload is idempotent", function()
+	Library:Unload()
+end)
+step("input after unload does not error", function()
+	local input = Instance.new("InputObject")
+	input.UserInputType = Enum.UserInputType.Keyboard
+	input.KeyCode = Enum.KeyCode.J
+	__UserInputService.InputBegan:Fire(input, false)
+	__RunService.RenderStepped:Fire(1 / 60)
+end)
+step("delayed timers after unload do not error", function()
+	__drainDelayed()
+	__RunService.RenderStepped:Fire(1 / 60)
+end)
+
+--==============================================================
+-- report
+--==============================================================
+
+print(("\n%d passed, %d failed"):format(passed, failed))
+if failed > 0 then
+	print("\nFAILURES:")
+	for _, f in failures do
+		print("  " .. f)
+	end
+	print("\nSMOKE FAILED")
+else
+	print("SMOKE PASSED")
+end

@@ -1,0 +1,255 @@
+--[[
+	Sable :: example
+	Exercises every element type, both addon managers, and the overlays.
+	Use it as a smoke test after a rebuild -- if anything here errors or looks
+	wrong, the library is wrong.
+
+	Loading (pick one):
+		local Library = loadstring(game:HttpGet("<your-raw-url>/dist/Sable.lua"))()
+		local Library = loadstring(readfile("Sable.lua"))()
+]]
+
+local Library = loadstring(readfile("Sable.lua"))()
+
+local ThemeManager = Library.ThemeManager
+local SaveManager = Library.SaveManager
+
+local Window = Library:CreateWindow({
+	Title = "Sable",
+	Footer = "sys " .. Library.Version,
+	Center = true,
+	AutoShow = true,
+	Resizable = true,
+})
+
+local Tabs = {
+	Main = Window:AddTab("Main"),
+	Visuals = Window:AddTab("Visuals"),
+	Player = Window:AddTab("Player"),
+	Settings = Window:AddTab("Settings"),
+}
+
+--==============================================================
+-- Main
+--==============================================================
+
+local Aimbot = Tabs.Main:AddLeftGroupbox("Aimbot")
+
+Aimbot:AddToggle("AimbotEnabled", {
+	Text = "Enabled",
+	Default = false,
+	Tooltip = "Master switch for the aim assist",
+}):AddKeyPicker("AimbotKey", {
+	Default = "MB2",
+	Mode = "Hold",
+	Text = "Aimbot",
+	SyncToggleState = false,
+})
+
+Aimbot:AddToggle("AimbotTeamCheck", { Text = "Team check", Default = true })
+Aimbot:AddToggle("AimbotWallCheck", { Text = "Wall check", Default = true })
+
+Aimbot:AddSlider("AimbotFOV", {
+	Text = "FOV",
+	Default = 120,
+	Min = 0,
+	Max = 500,
+	Rounding = 0,
+	Suffix = "px",
+})
+
+Aimbot:AddSlider("AimbotSmoothing", {
+	Text = "Smoothing",
+	Default = 0.35,
+	Min = 0,
+	Max = 1,
+	Rounding = 2,
+})
+
+Aimbot:AddDropdown("AimbotBone", {
+	Text = "Bone",
+	Values = { "Head", "UpperTorso", "HumanoidRootPart", "LowerTorso" },
+	Default = 1,
+})
+
+Aimbot:AddDivider()
+
+Aimbot:AddToggle("AimbotShowFOV", { Text = "Draw FOV circle", Default = true })
+	:AddColorPicker("AimbotFOVColor", { Default = Color3.fromRGB(233, 161, 59), Title = "FOV circle" })
+
+local FovBox = Aimbot:AddDependencyBox()
+FovBox:AddSlider("AimbotFOVThickness", { Text = "Circle thickness", Default = 1, Min = 1, Max = 5, Rounding = 0 })
+FovBox:SetupDependencies({ { Library.Toggles.AimbotShowFOV, true } })
+
+local Trigger = Tabs.Main:AddRightGroupbox("Triggerbot")
+
+Trigger:AddToggle("TriggerEnabled", { Text = "Enabled", Default = false })
+	:AddKeyPicker("TriggerKey", { Default = "C", Mode = "Toggle", Text = "Triggerbot" })
+
+Trigger:AddSlider("TriggerDelay", {
+	Text = "Delay",
+	Default = 60,
+	Min = 0,
+	Max = 500,
+	Rounding = 0,
+	Suffix = "ms",
+})
+
+Trigger:AddInput("TriggerWhitelist", {
+	Text = "Ignore",
+	Placeholder = "player names, comma separated",
+	Finished = true,
+})
+
+Trigger:AddButton({
+	Text = "Reset triggerbot",
+	Func = function()
+		Library.Options.TriggerDelay:SetValue(60)
+		Library.Toggles.TriggerEnabled:SetValue(false)
+		Library:Notify("Triggerbot reset", 3)
+	end,
+})
+
+local Risky = Tabs.Main:AddRightGroupbox("Risky")
+Risky:AddToggle("SilentAim", { Text = "Silent aim", Default = false, Risky = true })
+Risky:AddToggle("AutoShoot", {
+	Text = "Auto shoot",
+	Default = false,
+	Risky = true,
+	Disabled = true,
+	DisabledTooltip = "Unavailable in this game",
+})
+
+--==============================================================
+-- Visuals
+--==============================================================
+
+local ESP = Tabs.Visuals:AddLeftGroupbox("ESP")
+
+ESP:AddToggle("EspEnabled", { Text = "Enabled", Default = true })
+ESP:AddToggle("EspBoxes", { Text = "Boxes", Default = true })
+	:AddColorPicker("EspBoxColor", { Default = Color3.fromRGB(218, 213, 204) })
+ESP:AddToggle("EspNames", { Text = "Names", Default = false })
+	:AddColorPicker("EspNameColor", { Default = Color3.fromRGB(233, 161, 59) })
+ESP:AddToggle("EspTracers", { Text = "Tracers", Default = false })
+	:AddColorPicker("EspTracerColor", { Default = Color3.fromRGB(226, 78, 63), Transparency = 0 })
+
+ESP:AddSlider("EspFill", { Text = "Box fill", Default = 40, Min = 0, Max = 100, Rounding = 0, Suffix = "%" })
+ESP:AddSlider("EspMaxDistance", { Text = "Max distance", Default = 500, Min = 50, Max = 2000, Rounding = 0 })
+
+ESP:AddDropdown("EspTeams", {
+	Text = "Show",
+	Values = { "Enemies", "Team", "Everyone" },
+	Default = "Enemies",
+})
+
+local Chams = Tabs.Visuals:AddRightGroupbox("Chams")
+Chams:AddToggle("ChamsEnabled", { Text = "Enabled", Default = false })
+Chams:AddDropdown("ChamsParts", {
+	Text = "Parts",
+	Values = { "Head", "Torso", "Arms", "Legs" },
+	Default = { Head = true, Torso = true },
+	Multi = true,
+})
+Chams:AddColorPicker("ChamsVisible", { Default = Color3.fromRGB(126, 176, 106), Title = "Visible" })
+Chams:AddColorPicker("ChamsHidden", { Default = Color3.fromRGB(226, 78, 63), Title = "Hidden" })
+
+local WorldBox = Tabs.Visuals:AddRightTabbox()
+local WorldA = WorldBox:AddTab("World")
+WorldA:AddToggle("FullBright", { Text = "Fullbright", Default = false })
+WorldA:AddSlider("Ambient", { Text = "Ambient", Default = 50, Min = 0, Max = 100, Rounding = 0 })
+
+local WorldB = WorldBox:AddTab("Camera")
+WorldB:AddSlider("FieldOfView", { Text = "FOV", Default = 70, Min = 40, Max = 120, Rounding = 0 })
+WorldB:AddToggle("ThirdPerson", { Text = "Third person", Default = false })
+
+--==============================================================
+-- Player
+--==============================================================
+
+local Movement = Tabs.Player:AddLeftGroupbox("Movement")
+
+Movement:AddToggle("SpeedEnabled", { Text = "Walk speed", Default = false })
+	:AddKeyPicker("SpeedKey", { Default = "LSHIFT", Mode = "Hold", Text = "Speed" })
+Movement:AddSlider("SpeedValue", { Text = "Speed", Default = 16, Min = 16, Max = 200, Rounding = 0 })
+
+Movement:AddToggle("JumpEnabled", { Text = "Jump power", Default = false })
+Movement:AddSlider("JumpValue", { Text = "Power", Default = 50, Min = 50, Max = 300, Rounding = 0 })
+
+Movement:AddToggle("Noclip", { Text = "Noclip", Default = false, Risky = true })
+	:AddKeyPicker("NoclipKey", { Default = "N", Mode = "Toggle", Text = "Noclip" })
+
+Movement:AddButton({ Text = "Reset character", Func = function()
+	Library:Notify({ Title = "Character", Description = "Respawn requested", Time = 3, Good = true })
+end })
+
+local Danger = Tabs.Player:AddRightGroupbox("Danger")
+Danger:AddButton({
+	Text = "Kick self",
+	DoubleClick = true,
+	Func = function()
+		Library:Notify({ Title = "Kicked", Description = "Confirmed double click", Time = 4, Risk = true })
+	end,
+})
+
+local Info = Tabs.Player:AddRightGroupbox("Info")
+Info:AddLabel("Executor: " .. Library.Util.ExecutorName())
+Info:AddLabel("A wrapping label, used for longer explanatory copy that needs more than one line to say what it means.", true)
+
+--==============================================================
+-- Settings
+--==============================================================
+
+local MenuGroup = Tabs.Settings:AddLeftGroupbox("Menu")
+
+MenuGroup:AddKeyPicker("MenuKeybind", {
+	Default = "INS",
+	Mode = "Toggle",
+	Text = "Menu",
+	NoUI = true,
+	Callback = function() end,
+	ChangedCallback = function() end,
+})
+
+MenuGroup:AddToggle("WatermarkVisible", {
+	Text = "Watermark",
+	Default = true,
+	Callback = function(value)
+		Library:SetWatermarkVisibility(value)
+	end,
+})
+
+MenuGroup:AddToggle("KeybindsVisible", {
+	Text = "Keybind list",
+	Default = true,
+	Callback = function(value)
+		Library:SetKeybindVisibility(value)
+	end,
+})
+
+MenuGroup:AddButton({ Text = "Unload", Func = function() Library:Unload() end })
+
+Library.Options.MenuKeybind:OnChanged(function(value)
+	Library:SetMenuKeybind(value)
+end)
+
+Library:SetWatermark("SABLE")
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ "MenuKeybind", "WatermarkVisible", "KeybindsVisible" })
+
+ThemeManager:SetFolder("Sable")
+SaveManager:SetFolder("Sable/example")
+
+SaveManager:BuildConfigSection(Tabs.Settings)
+ThemeManager:ApplyToTab(Tabs.Settings)
+
+-- Restores the theme picked with "set as default" on a previous run. Without
+-- this, that button appears to do nothing across sessions.
+ThemeManager:LoadDefault()
+SaveManager:LoadAutoloadConfig()
+
+Library:Notify({ Title = "Sable", Description = "Example hub loaded", Time = 4 })

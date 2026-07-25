@@ -1,0 +1,97 @@
+{
+  "Overlays": {
+    "offset": 28,
+    "lines": 596,
+    "path": "src/Overlays.lua"
+  },
+  "Signal": {
+    "offset": 627,
+    "lines": 88,
+    "path": "src/Signal.lua"
+  },
+  "Theme": {
+    "offset": 718,
+    "lines": 290,
+    "path": "src/Theme.lua"
+  },
+  "Util": {
+    "offset": 1011,
+    "lines": 788,
+    "path": "src/Util.lua"
+  },
+  "Window": {
+    "offset": 1802,
+    "lines": 955,
+    "path": "src/Window.lua"
+  },
+  "addons/SaveManager": {
+    "offset": 2760,
+    "lines": 667,
+    "path": "src/addons/SaveManager.lua"
+  },
+  "addons/ThemeManager": {
+    "offset": 3430,
+    "lines": 447,
+    "path": "src/addons/ThemeManager.lua"
+  },
+  "elements/Base": {
+    "offset": 3880,
+    "lines": 240,
+    "path": "src/elements/Base.lua"
+  },
+  "elements/Button": {
+    "offset": 4123,
+    "lines": 276,
+    "path": "src/elements/Button.lua"
+  },
+  "elements/ColorPicker": {
+    "offset": 4402,
+    "lines": 686,
+    "path": "src/elements/ColorPicker.lua"
+  },
+  "elements/Divider": {
+    "offset": 5091,
+    "lines": 45,
+    "path": "src/elements/Divider.lua"
+  },
+  "elements/Dropdown": {
+    "offset": 5139,
+    "lines": 573,
+    "path": "src/elements/Dropdown.lua"
+  },
+  "elements/Input": {
+    "offset": 5715,
+    "lines": 242,
+    "path": "src/elements/Input.lua"
+  },
+  "elements/KeyPicker": {
+    "offset": 5960,
+    "lines": 647,
+    "path": "src/elements/KeyPicker.lua"
+  },
+  "elements/Label": {
+    "offset": 6610,
+    "lines": 111,
+    "path": "src/elements/Label.lua"
+  },
+  "elements/Slider": {
+    "offset": 6724,
+    "lines": 379,
+    "path": "src/elements/Slider.lua"
+  },
+  "elements/Toggle": {
+    "offset": 7106,
+    "lines": 217,
+    "path": "src/elements/Toggle.lua"
+  },
+  "elements/init": {
+    "offset": 7326,
+    "lines": 85,
+    "path": "src/elements/init.lua"
+  },
+  "init": {
+    "offset": 7414,
+    "lines": 687,
+    "path": "src/init.lua"
+  }
+}

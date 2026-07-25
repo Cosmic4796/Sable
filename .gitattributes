@@ -1,0 +1,6 @@
+# Luau sources are served raw over HTTP to executors -- keep them LF so the
+# bytes users load are identical on every platform.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.exe binary
+*.png binary

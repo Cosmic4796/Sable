@@ -1,0 +1,8104 @@
+--!nonstrict
+-- Sable v1.0.0 - generated bundle. Do not edit; edit src/ and rebuild.
+-- 19 modules, built by tools/build.py
+
+local __modules = {}
+local __cache = {}
+
+local function require(name)
+	local cached = __cache[name]
+	if cached ~= nil then
+		return cached
+	end
+
+	local factory = __modules[name]
+	if not factory then
+		error("[Sable] missing module: " .. tostring(name), 2)
+	end
+
+	local result = factory()
+	if result == nil then
+		result = true
+	end
+
+	__cache[name] = result
+	return result
+end
+
+__modules["Overlays"] = function()
+
+-- Sable :: Overlays
+--
+-- The chrome that lives outside the window: watermark, keybind list and the
+-- notification stack. Watermark and keybind list share one auto-sizing column
+-- in HudHolder, so hiding the watermark reflows the binds up for free. All of
+-- it keeps rendering while the menu itself is closed.
+
+local Util = require("Util")
+
+local Overlays = {}
+
+--==============================================================
+-- metrics
+--==============================================================
+
+local HUD_MARGIN = 10
+local HUD_GAP = 6
+
+local WATERMARK_HEIGHT = 20
+local WATERMARK_PAD_X = 6
+local WATERMARK_SPACING = 5
+local WATERMARK_REFRESH = 0.25 -- ~4 recomputes/sec
+
+-- ASCII pipe on purpose: the Code font has no box-drawing glyphs, and a missing
+-- glyph renders as tofu on some platforms.
+local SEPARATOR = "|"
+
+local BIND_ROW_HEIGHT = 16
+local BIND_PAD_X = 6
+local BIND_PAD_Y = 3
+local BIND_SPACING = 6
+local BIND_TEXT_MAX = 32
+
+local NOTIFY_WIDTH = 236
+local NOTIFY_BAR = 2
+local NOTIFY_PAD_X = 7
+local NOTIFY_PAD_Y = 5
+local NOTIFY_GAP = 6
+local NOTIFY_MARGIN = 12
+local NOTIFY_TITLE_HEIGHT = 14
+local NOTIFY_MIN_HEIGHT = 24
+local NOTIFY_DEFAULT_TIME = 5
+
+function Overlays.Install(Library)
+	local Sizes = Library.Sizes
+	local Fonts = Library.Fonts
+	local SlowTime = Library.Motion.Slow.Time
+
+	--- Destroying an instance leaves its colour registry entries behind, and
+	--- overlays churn instances constantly -- prune before the instance dies.
+	local function dispose(instance)
+		if not instance then
+			return
+		end
+
+		local ok, descendants = pcall(function()
+			return instance:GetDescendants()
+		end)
+		if ok and descendants then
+			for _, child in descendants do
+				Library:RemoveFromRegistry(child)
+			end
+		end
+
+		Library:RemoveFromRegistry(instance)
+		pcall(function()
+			instance:Destroy()
+		end)
+	end
+
+	--- Re-points a themed property at a different scheme key. Removing first
+	--- keeps the registry from growing every time a bind flickers on and off.
+	local function recolor(instance, property, key)
+		Library:RemoveFromRegistry(instance)
+		Library:AddToRegistry(instance, { [property] = key }, true)
+	end
+
+	--==============================================================
+	-- hud column
+	--==============================================================
+
+	local hudColumn = Library:Create("Frame", {
+		Name = "Column",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(HUD_MARGIN, HUD_MARGIN),
+		Size = UDim2.fromOffset(0, 0),
+		AutomaticSize = Enum.AutomaticSize.XY,
+		Parent = Library.HudHolder,
+	})
+
+	Util.ListLayout(hudColumn, HUD_GAP)
+
+	--==============================================================
+	-- watermark
+	--==============================================================
+
+	local watermark = Library:Panel({
+		Name = "Watermark",
+		Size = UDim2.fromOffset(0, WATERMARK_HEIGHT),
+		AutomaticSize = Enum.AutomaticSize.X,
+		LayoutOrder = 1,
+		Hud = true,
+		Parent = hudColumn,
+	}, "Panel", "Outline")
+
+	Util.Padding(watermark, 0, WATERMARK_PAD_X, 0, WATERMARK_PAD_X)
+
+	Util.Create("UIListLayout", {
+		Name = "List",
+		FillDirection = Enum.FillDirection.Horizontal,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, WATERMARK_SPACING),
+		Parent = watermark,
+	})
+
+	local segmentLabels = {}
+	local separatorLabels = {}
+
+	local function watermarkLabel(name, order, colorKey)
+		return Library:Label({
+			Name = name,
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.new(0, 0, 1, 0),
+			Font = Fonts.Value,
+			TextSize = Sizes.TextSmall,
+			-- Segments are separate instances precisely so the separator colour
+			-- can live in the registry; markup would hardcode it.
+			RichText = false,
+			LayoutOrder = order,
+			Hud = true,
+			Parent = watermark,
+		}, colorKey)
+	end
+
+	--- Rebuilds the label pool only when the segment count changes; the common
+	--- case (four segments, new numbers) is four text assignments.
+	local function setSegments(values)
+		for index = #segmentLabels + 1, #values do
+			if index > 1 then
+				local separator = watermarkLabel("Separator", index * 2 - 1, "Accent")
+				separator.Text = SEPARATOR
+				separatorLabels[index - 1] = separator
+			end
+			segmentLabels[index] = watermarkLabel("Segment", index * 2, "Font")
+		end
+
+		for index = #segmentLabels, #values + 1, -1 do
+			dispose(segmentLabels[index])
+			segmentLabels[index] = nil
+
+			local separator = separatorLabels[index - 1]
+			if separator then
+				dispose(separator)
+				separatorLabels[index - 1] = nil
+			end
+		end
+
+		for index, value in values do
+			segmentLabels[index].Text = tostring(value)
+		end
+	end
+
+	local leadingSegment = Library:FormatLabel(Library.Name)
+	local fps = 0
+	local frameMs = 0
+
+	local function refreshWatermark()
+		if Library.Unloaded then
+			return
+		end
+
+		setSegments({
+			leadingSegment,
+			("%d FPS"):format(fps),
+			("%d MS"):format(frameMs),
+			tostring(os.date("%H:%M:%S")),
+		})
+	end
+
+	local frameCount = 0
+	local frameTime = 0
+
+	Library:GiveSignal(Library.RenderStepped:Connect(function(delta)
+		if Library.Unloaded then
+			return
+		end
+
+		frameCount += 1
+		frameTime += delta
+		if frameTime < WATERMARK_REFRESH then
+			return
+		end
+
+		-- Averaged over the whole window rather than sampled from one frame, so
+		-- a single hitch does not make the readout jump.
+		local average = frameTime / frameCount
+		fps = average > 0 and math.floor(1 / average + 0.5) or 0
+		frameMs = math.floor(average * 1000 + 0.5)
+
+		frameCount = 0
+		frameTime = 0
+
+		refreshWatermark()
+	end))
+
+	Library.Watermark = watermark
+	Library.WatermarkText = leadingSegment
+	Library.WatermarkVisible = true
+
+	function Library:SetWatermark(text)
+		text = tostring(text or "")
+		leadingSegment = self:FormatLabel(text ~= "" and text or self.Name)
+		self.WatermarkText = leadingSegment
+		refreshWatermark()
+		return self
+	end
+
+	function Library:SetWatermarkVisibility(visible)
+		visible = visible ~= false
+		self.WatermarkVisible = visible
+		watermark.Visible = visible
+		return self
+	end
+
+	refreshWatermark()
+
+	--==============================================================
+	-- keybind list
+	--==============================================================
+
+	local keybindPanel = Library:Panel({
+		Name = "Keybinds",
+		Size = UDim2.fromOffset(0, 0),
+		AutomaticSize = Enum.AutomaticSize.XY,
+		Visible = false,
+		LayoutOrder = 2,
+		Hud = true,
+		Parent = hudColumn,
+	}, "Panel", "Outline")
+
+	Util.Padding(keybindPanel, BIND_PAD_Y, BIND_PAD_X, BIND_PAD_Y, BIND_PAD_X)
+	Util.ListLayout(keybindPanel, 1)
+
+	local bindRows = {}
+	local bindCount = 0
+	local bindOrder = 0
+
+	Library.KeybindsVisible = true
+
+	local function refreshKeybindPanel()
+		keybindPanel.Visible = Library.KeybindsVisible and bindCount > 0
+	end
+
+	local function paintBindRow(row)
+		row.TextLabel.Text = Library:FormatLabel(Util.Truncate(row.TextValue, BIND_TEXT_MAX))
+		row.KeyLabel.Text = ("[%s]"):format(Library:FormatLabel(row.KeyValue))
+
+		-- KeyPickers repaint on every state change, so only touch the registry
+		-- when the colour actually differs.
+		local key = row.Active and "Accent" or "FontDim"
+		if row.ColorKey ~= key then
+			row.ColorKey = key
+			recolor(row.KeyLabel, "TextColor3", key)
+		end
+	end
+
+	local function createBindRow(id)
+		bindOrder += 1
+
+		local frame = Library:Create("Frame", {
+			Name = "Bind",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.new(0, 0, 0, BIND_ROW_HEIGHT),
+			AutomaticSize = Enum.AutomaticSize.X,
+			LayoutOrder = bindOrder,
+			Parent = keybindPanel,
+		})
+
+		Util.Create("UIListLayout", {
+			Name = "List",
+			FillDirection = Enum.FillDirection.Horizontal,
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, BIND_SPACING),
+			Parent = frame,
+		})
+
+		local function label(name, order, colorKey)
+			return Library:Label({
+				Name = name,
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 1, 0),
+				Font = Fonts.Value,
+				TextSize = Sizes.TextSmall,
+				LayoutOrder = order,
+				Hud = true,
+				Parent = frame,
+			}, colorKey)
+		end
+
+		return {
+			Frame = frame,
+			TextLabel = label("Text", 1, "Font"),
+			KeyLabel = label("Key", 2, "FontDim"),
+			TextValue = tostring(id),
+			KeyValue = "NONE",
+			Mode = "Toggle",
+			Active = false,
+			ColorKey = "FontDim",
+		}
+	end
+
+	local KeybindList = {}
+	Library.KeybindList = KeybindList
+
+	--- Creates the row on first call for `id`, patches it afterwards. Only the
+	--- fields present in `data` are touched, so `:Set(id, { Active = true })` is
+	--- a legitimate per-frame update.
+	function KeybindList:Set(id, data)
+		if Library.Unloaded or id == nil then
+			return nil
+		end
+
+		data = data or {}
+
+		local row = bindRows[id]
+		if not row then
+			row = createBindRow(id)
+			bindRows[id] = row
+			bindCount += 1
+		end
+
+		if data.Text ~= nil then
+			row.TextValue = tostring(data.Text)
+		end
+		if data.Key ~= nil then
+			row.KeyValue = tostring(data.Key)
+		end
+		if data.Mode ~= nil then
+			row.Mode = tostring(data.Mode)
+		end
+		if data.Active ~= nil then
+			row.Active = data.Active == true
+		end
+
+		paintBindRow(row)
+		refreshKeybindPanel()
+
+		return row
+	end
+
+	function KeybindList:Remove(id)
+		local row = bindRows[id]
+		if not row then
+			return
+		end
+
+		bindRows[id] = nil
+		bindCount -= 1
+
+		dispose(row.Frame)
+		refreshKeybindPanel()
+	end
+
+	function KeybindList:Clear()
+		for id in bindRows do
+			self:Remove(id)
+		end
+	end
+
+	Library.KeybindPanel = keybindPanel
+
+	function Library:SetKeybindVisibility(visible)
+		self.KeybindsVisible = visible ~= false
+		refreshKeybindPanel()
+		return self
+	end
+
+	--==============================================================
+	-- notifications
+	--==============================================================
+
+	local notifications = {}
+
+	--- Off-screen position is a full width past the edge, so the slide reads as
+	--- the panel entering from outside the viewport rather than fading in.
+	local function slotPosition(note, shown)
+		if note.Side == "Left" then
+			local offset = shown and NOTIFY_MARGIN or -(NOTIFY_WIDTH + NOTIFY_MARGIN)
+			return UDim2.new(0, offset, 0, note.Y)
+		end
+
+		local offset = shown and -NOTIFY_MARGIN or (NOTIFY_WIDTH + NOTIFY_MARGIN)
+		return UDim2.new(1, offset, 0, note.Y)
+	end
+
+	--- Re-stacks every live notification from the top. Called after any removal
+	--- so the survivors close the gap instead of leaving a hole.
+	local function reflow()
+		local y = NOTIFY_MARGIN
+
+		for _, note in notifications do
+			if note.Y ~= y then
+				note.Y = y
+				Library:Tween(note.Frame, { Position = slotPosition(note, note.Shown) }, Library.Motion.Slow)
+			end
+			y += note.Height + NOTIFY_GAP
+		end
+	end
+
+	local function close(note)
+		if note.Closing then
+			return
+		end
+		note.Closing = true
+		note.Shown = false
+
+		if Library.Unloaded then
+			dispose(note.Frame)
+			return
+		end
+
+		Library:Tween(note.Frame, { Position = slotPosition(note, false) }, Library.Motion.Slow)
+
+		-- Stays in the stack until it is fully off screen; removing it early
+		-- would slide the rest up through it.
+		task.delay(SlowTime + 0.05, function()
+			local index = table.find(notifications, note)
+			if index then
+				table.remove(notifications, index)
+			end
+
+			dispose(note.Frame)
+
+			if not Library.Unloaded then
+				reflow()
+			end
+		end)
+	end
+
+	--- Notify("text", 4) or Notify({ Title =, Description =, Time =, Risk =,
+	--- Good = }). Returns the notification handle, which carries :Close().
+	function Library:Notify(content, duration)
+		if self.Unloaded then
+			return nil
+		end
+
+		local options = type(content) == "table" and content or { Description = content }
+
+		local titleText = options.Title ~= nil and self:FormatLabel(options.Title) or nil
+		local bodySource = options.Description
+		if bodySource == nil then
+			bodySource = options.Text
+		end
+		local bodyText = bodySource ~= nil and tostring(bodySource) or nil
+
+		if (titleText == nil or titleText == "") and (bodyText == nil or bodyText == "") then
+			return nil
+		end
+
+		local edgeKey = "Accent"
+		if options.Risk then
+			edgeKey = "Risk"
+		elseif options.Good then
+			edgeKey = "Good"
+		end
+
+		local hold = tonumber(duration) or tonumber(options.Time) or NOTIFY_DEFAULT_TIME
+		hold = math.max(hold, 0.5)
+
+		-- Height is measured up front rather than left to AutomaticSize: the
+		-- stack needs every panel's height before the first frame is drawn.
+		local inner = NOTIFY_WIDTH - NOTIFY_BAR - NOTIFY_PAD_X * 2
+		local bodyHeight = 0
+		if bodyText then
+			local measured = Util.TextSize(bodyText, Sizes.TextSmall, Fonts.Label, Vector2.new(inner, 4096))
+			bodyHeight = math.max(math.ceil(measured.Y), Sizes.TextSmall + 2)
+		end
+
+		local titleHeight = titleText and NOTIFY_TITLE_HEIGHT or 0
+		local innerGap = (titleText and bodyText) and 2 or 0
+		local height =
+			math.max(NOTIFY_PAD_Y * 2 + titleHeight + innerGap + bodyHeight, NOTIFY_MIN_HEIGHT)
+
+		local y = NOTIFY_MARGIN
+		for _, existing in notifications do
+			y += existing.Height + NOTIFY_GAP
+		end
+
+		local note = {
+			Side = self.NotifySide == "Left" and "Left" or "Right",
+			Height = height,
+			Y = y,
+			Shown = false,
+			Closing = false,
+		}
+
+		local frame = self:Panel({
+			Name = "Notification",
+			AnchorPoint = note.Side == "Left" and Vector2.new(0, 0) or Vector2.new(1, 0),
+			Position = slotPosition(note, false),
+			Size = UDim2.fromOffset(NOTIFY_WIDTH, height),
+			ZIndex = 200,
+			Parent = self.NotificationHolder,
+		}, "Panel", "Outline")
+
+		note.Frame = frame
+
+		self:Create("Frame", {
+			Name = "Edge",
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.new(0, NOTIFY_BAR, 1, 0),
+			ZIndex = 201,
+			Theme = { BackgroundColor3 = edgeKey },
+			Parent = frame,
+		})
+
+		local body = self:Create("Frame", {
+			Name = "Body",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(NOTIFY_BAR + NOTIFY_PAD_X, NOTIFY_PAD_Y),
+			Size = UDim2.new(1, -(NOTIFY_BAR + NOTIFY_PAD_X * 2), 1, -NOTIFY_PAD_Y * 2),
+			ZIndex = 201,
+			Parent = frame,
+		})
+
+		Util.ListLayout(body, innerGap)
+
+		if titleText then
+			self:Label({
+				Name = "Title",
+				Size = UDim2.new(1, 0, 0, NOTIFY_TITLE_HEIGHT),
+				Text = titleText,
+				Font = Fonts.Label,
+				TextSize = Sizes.Text,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				LayoutOrder = 1,
+				ZIndex = 202,
+				Parent = body,
+			}, "Font")
+		end
+
+		if bodyText then
+			self:Label({
+				Name = "Description",
+				Size = UDim2.new(1, 0, 0, bodyHeight),
+				Text = bodyText,
+				Font = Fonts.Label,
+				TextSize = Sizes.TextSmall,
+				TextWrapped = true,
+				TextYAlignment = Enum.TextYAlignment.Top,
+				LayoutOrder = 2,
+				ZIndex = 202,
+				Parent = body,
+			}, "FontDim")
+		end
+
+		function note:Close()
+			close(self)
+		end
+
+		table.insert(notifications, note)
+
+		note.Shown = true
+		self:Tween(frame, { Position = slotPosition(note, true) }, self.Motion.Slow)
+
+		task.delay(hold, function()
+			close(note)
+		end)
+
+		return note
+	end
+
+	Library:OnUnload(function()
+		for index = #notifications, 1, -1 do
+			dispose(notifications[index].Frame)
+			notifications[index] = nil
+		end
+
+		for id in bindRows do
+			bindRows[id] = nil
+		end
+		bindCount = 0
+
+		table.clear(segmentLabels)
+		table.clear(separatorLabels)
+	end)
+end
+
+return Overlays
+end
+
+__modules["Signal"] = function()
+
+-- Sable :: Signal
+-- Minimal, allocation-light signal. Handlers are pcall'd so one bad callback
+-- can never take the menu down mid-frame.
+
+local Signal = {}
+Signal.__index = Signal
+
+local Connection = {}
+Connection.__index = Connection
+
+function Connection:Disconnect()
+	if not self.Connected then
+		return
+	end
+	self.Connected = false
+
+	local handlers = self._signal._handlers
+	for i = #handlers, 1, -1 do
+		if handlers[i] == self then
+			table.remove(handlers, i)
+			break
+		end
+	end
+
+	self._fn = nil
+	self._signal = nil
+end
+
+Connection.disconnect = Connection.Disconnect
+Connection.Destroy = Connection.Disconnect
+
+function Signal.new(name)
+	return setmetatable({
+		_handlers = {},
+		_name = name or "Signal",
+	}, Signal)
+end
+
+function Signal:Connect(fn)
+	assert(type(fn) == "function", "[Sable] Signal:Connect expects a function")
+
+	local connection = setmetatable({
+		Connected = true,
+		_fn = fn,
+		_signal = self,
+	}, Connection)
+
+	table.insert(self._handlers, connection)
+	return connection
+end
+
+Signal.connect = Signal.Connect
+
+function Signal:Once(fn)
+	local connection
+	connection = self:Connect(function(...)
+		connection:Disconnect()
+		fn(...)
+	end)
+	return connection
+end
+
+function Signal:Fire(...)
+	-- Snapshot so a handler disconnecting (or connecting) mid-fire is safe.
+	local snapshot = table.clone(self._handlers)
+	for i = 1, #snapshot do
+		local connection = snapshot[i]
+		if connection.Connected then
+			local ok, err = pcall(connection._fn, ...)
+			if not ok then
+				warn(("[Sable] %s handler error: %s"):format(self._name, tostring(err)))
+			end
+		end
+	end
+end
+
+function Signal:DisconnectAll()
+	local snapshot = table.clone(self._handlers)
+	for i = 1, #snapshot do
+		snapshot[i]:Disconnect()
+	end
+	table.clear(self._handlers)
+end
+
+Signal.Destroy = Signal.DisconnectAll
+
+return Signal
+end
+
+__modules["Theme"] = function()
+
+-- Sable :: Theme
+-- The design system: palette, metrics, fonts, and the live colour registry.
+--
+-- LOOK: "tactical / instrument". Warm dark grey, one amber accent, hard 1px
+-- hairlines, zero corner radius, uppercase letterspaced chrome, monospace
+-- numerals. Deliberately NOT: rounded cards, gradients as decoration, glow,
+-- blur, emoji, pastel accents.
+
+local Util = require("Util")
+
+local Theme = {}
+
+--==============================================================
+-- palette
+--==============================================================
+
+-- Warm greys: every neutral carries a little orange so the amber accent reads
+-- as part of the same family instead of a sticker on top of a blue-grey UI.
+Theme.Default = {
+	Background = Color3.fromRGB(18, 17, 15),
+	Panel = Color3.fromRGB(26, 25, 22),
+	PanelRaised = Color3.fromRGB(34, 32, 29),
+	PanelSunken = Color3.fromRGB(13, 12, 11),
+
+	Outline = Color3.fromRGB(52, 49, 44),
+	OutlineDim = Color3.fromRGB(36, 34, 30),
+
+	Accent = Color3.fromRGB(233, 161, 59),
+	AccentDim = Color3.fromRGB(126, 88, 34),
+
+	Font = Color3.fromRGB(218, 213, 204),
+	FontDim = Color3.fromRGB(124, 117, 107),
+	FontFaint = Color3.fromRGB(84, 79, 72),
+
+	Risk = Color3.fromRGB(226, 78, 63),
+	Good = Color3.fromRGB(126, 176, 106),
+
+	Black = Color3.fromRGB(0, 0, 0),
+}
+
+-- Linoria-flavoured names, so ported scripts and old configs keep working.
+Theme.Aliases = {
+	MainColor = "Panel",
+	BackgroundColor = "Background",
+	AccentColor = "Accent",
+	OutlineColor = "Outline",
+	FontColor = "Font",
+	RiskColor = "Risk",
+}
+
+--==============================================================
+-- metrics
+--==============================================================
+
+-- Dense on purpose. Instrument panels pack information; they do not breathe.
+Theme.Sizes = {
+	WindowWidth = 566,
+	WindowHeight = 604,
+	WindowMinWidth = 420,
+	WindowMinHeight = 320,
+
+	TitleBar = 30,
+	TabStrip = 26,
+
+	RowHeight = 20,
+	RowGap = 2,
+
+	GroupPad = 8,
+	GroupGap = 8,
+	ColumnGap = 8,
+	GroupHeader = 18,
+
+	Outline = 1,
+	Tick = 7, -- corner tick arm length
+	TickThickness = 1,
+
+	Text = 12, -- element labels
+	TextSmall = 11, -- readouts, captions, footer
+	TextTitle = 13, -- window title, group headers
+
+	Control = 13, -- checkbox / swatch square edge
+	Track = 8, -- slider bar height
+	Segments = 16, -- slider segment count
+	Indicator = 2, -- active-tab underline thickness
+
+	PopupWidth = 0, -- 0 = match anchor width
+	PopupMaxItems = 9,
+
+	ScrollBar = 3,
+}
+
+-- Monospace throughout. Mixing a proportional UI font in is the single fastest
+-- way to make this read as a generic dashboard.
+Theme.Fonts = {
+	Label = Enum.Font.Code,
+	Value = Enum.Font.Code,
+	Title = Enum.Font.Code,
+}
+
+Theme.Motion = {
+	Fast = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+	Slow = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+	Fade = 0.14,
+}
+
+--==============================================================
+-- install
+--==============================================================
+
+function Theme.Install(Library)
+	Library.Scheme = table.clone(Theme.Default)
+	Library.Sizes = table.clone(Theme.Sizes)
+	Library.Fonts = table.clone(Theme.Fonts)
+	Library.Motion = table.clone(Theme.Motion)
+	Library.Registry = {}
+	-- [Instance] = entry, so re-registration is O(1) and can merge in place.
+	Library.RegistryIndex = {}
+
+	--- Resolves a scheme key (or alias) to a live colour.
+	function Library:GetColor(key)
+		if typeof(key) == "Color3" then
+			return key
+		end
+		if type(key) ~= "string" then
+			return nil
+		end
+		local resolved = Theme.Aliases[key] or key
+		return self.Scheme[resolved]
+	end
+
+	--- properties maps an instance property name to either a scheme key
+	--- ("Accent") or a function(scheme) -> value for derived colours.
+	---
+	---   Library:AddToRegistry(frame, { BackgroundColor3 = "Panel" })
+	---
+	--- `isHud` marks chrome that stays visible while the menu is closed
+	--- (watermark, keybind list) so themes can treat it separately.
+	--- Re-registering the SAME instance MERGES into its existing entry rather
+	--- than appending a second one. Two entries for one instance would fight
+	--- over the same property and the winner would depend on registry iteration
+	--- order -- which silently beat state-dependent colours (a toggle's label
+	--- reverting to a static colour after any theme switch) and leaked an entry
+	--- on every state flip.
+	function Library:AddToRegistry(instance, properties, isHud)
+		local existing = self.RegistryIndex[instance]
+		if existing and not existing.Dead then
+			for property, source in properties do
+				existing.Properties[property] = source
+			end
+			if isHud then
+				existing.Hud = true
+			end
+			self:ApplyRegistryEntry(existing)
+			return existing
+		end
+
+		local entry = {
+			Instance = instance,
+			Properties = properties,
+			Hud = isHud or false,
+		}
+		table.insert(self.Registry, entry)
+		self.RegistryIndex[instance] = entry
+		self:ApplyRegistryEntry(entry)
+		return entry
+	end
+
+	--- The source currently mapped to a property, so a caller can restore an
+	--- element's own (possibly function-based) colour rule after temporarily
+	--- overriding it.
+	function Library:GetRegistrySource(instance, property)
+		local entry = self.RegistryIndex[instance]
+		if entry and not entry.Dead then
+			return entry.Properties[property]
+		end
+		return nil
+	end
+
+	--- Same behaviour as AddToRegistry; the separate name states the intent
+	--- that you are changing an existing mapping (on/off, enabled/disabled).
+	function Library:Retheme(instance, properties)
+		return self:AddToRegistry(instance, properties)
+	end
+
+	--- Also drops entries for DESCENDANTS of `instance`. Writing to a destroyed
+	--- Instance does not throw in Roblox, so the dead-entry pruning in
+	--- UpdateColorsUsingRegistry never reclaims a destroyed element's children
+	--- on its own.
+	function Library:RemoveFromRegistry(instance)
+		for index = #self.Registry, 1, -1 do
+			local entry = self.Registry[index]
+			local target = entry.Instance
+
+			local matches = target == instance
+			if not matches then
+				local ok, isDescendant = pcall(function()
+					return target:IsDescendantOf(instance)
+				end)
+				matches = ok and isDescendant
+			end
+
+			if matches then
+				self.RegistryIndex[target] = nil
+				table.remove(self.Registry, index)
+			end
+		end
+	end
+
+	function Library:ApplyRegistryEntry(entry)
+		local instance = entry.Instance
+		if entry.Dead then
+			return false
+		end
+
+		for property, source in entry.Properties do
+			local value
+			if type(source) == "function" then
+				local ok, result = pcall(source, self.Scheme)
+				value = ok and result or nil
+			else
+				value = self:GetColor(source)
+			end
+
+			if value ~= nil then
+				local ok = pcall(function()
+					instance[property] = value
+				end)
+				if not ok then
+					-- Instance was destroyed, or the property does not exist.
+					entry.Dead = true
+					return false
+				end
+			end
+		end
+
+		return true
+	end
+
+	--- Re-applies every registered colour. Cheap enough to call on any change;
+	--- dead entries are pruned as they are found.
+	function Library:UpdateColorsUsingRegistry()
+		for index = #self.Registry, 1, -1 do
+			local entry = self.Registry[index]
+			if not self:ApplyRegistryEntry(entry) then
+				self.RegistryIndex[entry.Instance] = nil
+				table.remove(self.Registry, index)
+			end
+		end
+	end
+
+	--- SetScheme("Accent", color) or SetScheme({ Accent = color, ... })
+	function Library:SetScheme(keyOrTable, color)
+		if type(keyOrTable) == "table" then
+			for key, value in keyOrTable do
+				local resolved = Theme.Aliases[key] or key
+				if self.Scheme[resolved] ~= nil and typeof(value) == "Color3" then
+					self.Scheme[resolved] = value
+				end
+			end
+		else
+			local resolved = Theme.Aliases[keyOrTable] or keyOrTable
+			if self.Scheme[resolved] == nil then
+				return false
+			end
+			self.Scheme[resolved] = color
+		end
+
+		-- Accent drives a derived shade; keep it consistent unless explicitly set.
+		if
+			(type(keyOrTable) == "table" and keyOrTable.Accent and not keyOrTable.AccentDim)
+			or (keyOrTable == "Accent" or keyOrTable == "AccentColor")
+		then
+			self.Scheme.AccentDim = Util.Shift(self.Scheme.Accent, 0.55)
+		end
+
+		self:UpdateColorsUsingRegistry()
+		return true
+	end
+
+	function Library:ResetScheme()
+		self.Scheme = table.clone(Theme.Default)
+		self:UpdateColorsUsingRegistry()
+	end
+
+	Library.ThemeDefaults = Theme.Default
+	Library.ThemeAliases = Theme.Aliases
+end
+
+return Theme
+end
+
+__modules["Util"] = function()
+
+-- Sable :: Util
+-- Dependency-free helpers. Nothing in here may require() another Sable module.
+
+local TweenService = game:GetService("TweenService")
+local TextService = game:GetService("TextService")
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+
+local Util = {}
+
+Util.Services = {
+	Tween = TweenService,
+	Text = TextService,
+	Input = UserInputService,
+	Players = Players,
+	Http = HttpService,
+	CoreGui = CoreGui,
+	Run = RunService,
+}
+
+--==============================================================
+-- environment
+--==============================================================
+
+-- Captured by ordinary global lookup at load time, which is the only method
+-- that works everywhere: not every executor mirrors these into getgenv()'s
+-- table, and Roblox's _G is a separate shared table that never holds them.
+-- Referencing a global that does not exist yields nil rather than erroring.
+local Captured = {
+	getgenv = getgenv,
+	gethui = gethui,
+	get_hidden_gui = get_hidden_gui,
+	protect_gui = protect_gui,
+	syn = syn,
+	identifyexecutor = identifyexecutor,
+	getexecutorname = getexecutorname,
+	setclipboard = setclipboard,
+	toclipboard = toclipboard,
+	writefile = writefile,
+	readfile = readfile,
+	appendfile = appendfile,
+	isfile = isfile,
+	isfolder = isfolder,
+	makefolder = makefolder,
+	delfile = delfile,
+	delfolder = delfolder,
+	listfiles = listfiles,
+}
+
+--- Reads an executor global by name without exploding when it is absent.
+--- Falls back to getgenv()'s table for hosts that populate it late.
+function Util.Global(name)
+	local captured = Captured[name]
+	if captured ~= nil then
+		return captured
+	end
+
+	local ok, env = pcall(function()
+		return getgenv and getgenv() or nil
+	end)
+	if ok and type(env) == "table" then
+		local value = rawget(env, name)
+		if value ~= nil then
+			return value
+		end
+	end
+
+	return nil
+end
+
+--- Best-effort executor name, used for the watermark and diagnostics.
+function Util.ExecutorName()
+	local identify = Util.Global("identifyexecutor") or Util.Global("getexecutorname")
+	if type(identify) == "function" then
+		local ok, name = pcall(identify)
+		if ok and type(name) == "string" and #name > 0 then
+			return name
+		end
+	end
+	if Util.Global("syn") then
+		return "Synapse"
+	end
+	if not Util.Global("writefile") then
+		return "Studio"
+	end
+	return "Unknown"
+end
+
+function Util.IsExecutor()
+	return type(Util.Global("writefile")) == "function"
+end
+
+--==============================================================
+-- gui hosting
+--==============================================================
+
+--- Returns the safest available parent for our ScreenGui.
+function Util.GetGuiParent()
+	local hui = Util.Global("gethui")
+	if type(hui) == "function" then
+		local ok, container = pcall(hui)
+		if ok and typeof(container) == "Instance" then
+			return container
+		end
+	end
+
+	local hidden = Util.Global("get_hidden_gui")
+	if type(hidden) == "function" then
+		local ok, container = pcall(hidden)
+		if ok and typeof(container) == "Instance" then
+			return container
+		end
+	end
+
+	-- CoreGui access throws for unprivileged contexts; probe before committing.
+	local ok = pcall(function()
+		return CoreGui:GetChildren()
+	end)
+	if ok then
+		return CoreGui
+	end
+
+	local player = Players.LocalPlayer
+	if player then
+		local playerGui = player:FindFirstChildOfClass("PlayerGui")
+		if playerGui then
+			return playerGui
+		end
+		return player:WaitForChild("PlayerGui")
+	end
+
+	return CoreGui
+end
+
+--- Hides the gui from generic `game.CoreGui:GetChildren()` style detections.
+function Util.ProtectGui(gui)
+	local syn = Util.Global("syn")
+	if type(syn) == "table" and type(syn.protect_gui) == "function" then
+		pcall(syn.protect_gui, gui)
+	end
+
+	local protect = Util.Global("protect_gui")
+	if type(protect) == "function" then
+		pcall(protect, gui)
+	end
+
+	return gui
+end
+
+--==============================================================
+-- instances
+--==============================================================
+
+--- Instance.new + property table. `Parent` is applied last so we never
+--- render a half-configured instance.
+function Util.Create(className, props)
+	local instance = Instance.new(className)
+	local parent = nil
+
+	if props then
+		for key, value in props do
+			if key == "Parent" then
+				parent = value
+			elseif type(key) == "number" then
+				value.Parent = instance
+			else
+				instance[key] = value
+			end
+		end
+	end
+
+	if parent then
+		instance.Parent = parent
+	end
+
+	return instance
+end
+
+--- 1px hairline border. Sable never uses BorderSizePixel (it renders inside
+--- the frame and fights with layouts) -- always a UIStroke.
+function Util.Stroke(parent, color, thickness, transparency)
+	return Util.Create("UIStroke", {
+		Name = "Stroke",
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		Color = color or Color3.new(0, 0, 0),
+		Thickness = thickness or 1,
+		Transparency = transparency or 0,
+		LineJoinMode = Enum.LineJoinMode.Miter,
+		Parent = parent,
+	})
+end
+
+--- Very subtle vertical falloff. Used on chrome only, never on controls.
+function Util.Falloff(parent, topScale, bottomScale, rotation)
+	topScale = topScale or 1
+	bottomScale = bottomScale or 0.92
+
+	return Util.Create("UIGradient", {
+		Name = "Falloff",
+		Rotation = rotation or 90,
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.new(topScale, topScale, topScale)),
+			ColorSequenceKeypoint.new(1, Color3.new(bottomScale, bottomScale, bottomScale)),
+		}),
+		Parent = parent,
+	})
+end
+
+function Util.Padding(parent, top, right, bottom, left)
+	return Util.Create("UIPadding", {
+		Name = "Padding",
+		PaddingTop = UDim.new(0, top or 0),
+		PaddingRight = UDim.new(0, right or top or 0),
+		PaddingBottom = UDim.new(0, bottom or top or 0),
+		PaddingLeft = UDim.new(0, left or right or top or 0),
+		Parent = parent,
+	})
+end
+
+function Util.ListLayout(parent, padding, sortOrder)
+	return Util.Create("UIListLayout", {
+		Name = "List",
+		FillDirection = Enum.FillDirection.Vertical,
+		SortOrder = sortOrder or Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, padding or 0),
+		Parent = parent,
+	})
+end
+
+--==============================================================
+-- math
+--==============================================================
+
+function Util.Clamp(value, min, max)
+	if value < min then
+		return min
+	elseif value > max then
+		return max
+	end
+	return value
+end
+
+function Util.Lerp(a, b, alpha)
+	return a + (b - a) * alpha
+end
+
+--- Rounds half away from zero: 2.5 -> 3, -2.5 -> -3.
+--- `math.floor(v + 0.5)` alone is wrong for negatives -- it renders -5 as -6.
+local function roundHalfAway(value)
+	if value >= 0 then
+		return math.floor(value + 0.5)
+	end
+	return math.ceil(value - 0.5)
+end
+
+--- Rounds to `decimals` places. decimals = 0 gives an integer.
+function Util.Round(value, decimals)
+	local mult = 10 ^ (decimals or 0)
+	return roundHalfAway(value * mult) / mult
+end
+
+function Util.Alpha(value, min, max)
+	if max == min then
+		return 0
+	end
+	return Util.Clamp((value - min) / (max - min), 0, 1)
+end
+
+--- Formats a number for the right-aligned monospace readouts.
+function Util.FormatNumber(value, decimals)
+	decimals = decimals or 0
+	if decimals <= 0 then
+		return tostring(roundHalfAway(value))
+	end
+	return string.format("%." .. decimals .. "f", value)
+end
+
+--==============================================================
+-- color
+--==============================================================
+
+function Util.ToHex(color)
+	return string.format(
+		"%02X%02X%02X",
+		math.floor(color.R * 255 + 0.5),
+		math.floor(color.G * 255 + 0.5),
+		math.floor(color.B * 255 + 0.5)
+	)
+end
+
+function Util.FromHex(hex)
+	if type(hex) ~= "string" then
+		return nil
+	end
+	hex = hex:gsub("^#", ""):gsub("%s", "")
+	if #hex == 3 then
+		hex = hex:sub(1, 1):rep(2) .. hex:sub(2, 2):rep(2) .. hex:sub(3, 3):rep(2)
+	end
+	if #hex ~= 6 or hex:match("[^0-9a-fA-F]") then
+		return nil
+	end
+	return Color3.fromRGB(
+		tonumber(hex:sub(1, 2), 16),
+		tonumber(hex:sub(3, 4), 16),
+		tonumber(hex:sub(5, 6), 16)
+	)
+end
+
+--- Multiplies value in HSV space. factor > 1 lightens, < 1 darkens.
+function Util.Shift(color, factor)
+	local h, s, v = color:ToHSV()
+	return Color3.fromHSV(h, s, Util.Clamp(v * factor, 0, 1))
+end
+
+function Util.Mix(a, b, alpha)
+	return a:Lerp(b, alpha)
+end
+
+--==============================================================
+-- text
+--==============================================================
+
+--- Instrument-panel letterspacing. Roblox has no letter-spacing property, so
+--- we interleave real spaces. Only used on short chrome labels.
+function Util.Letterspace(text, separator)
+	separator = separator or " "
+	local chars = {}
+	for _, code in utf8.codes(tostring(text)) do
+		table.insert(chars, utf8.char(code))
+	end
+	return table.concat(chars, separator)
+end
+
+function Util.TextSize(text, textSize, font, bounds)
+	local ok, size = pcall(function()
+		return TextService:GetTextSize(
+			tostring(text),
+			textSize,
+			font,
+			bounds or Vector2.new(math.huge, math.huge)
+		)
+	end)
+	if ok and size then
+		return size
+	end
+	-- Code is ~0.6em wide; good enough for a fallback measurement.
+	return Vector2.new(#tostring(text) * textSize * 0.6, textSize)
+end
+
+function Util.Truncate(text, maxChars)
+	text = tostring(text)
+	if utf8.len(text) and (utf8.len(text) :: number) <= maxChars then
+		return text
+	end
+	if #text <= maxChars then
+		return text
+	end
+	return text:sub(1, math.max(1, maxChars - 1)) .. "\u{2026}"
+end
+
+--==============================================================
+-- input
+--==============================================================
+
+local MOUSE_TO_NAME = {
+	[Enum.UserInputType.MouseButton1] = "MB1",
+	[Enum.UserInputType.MouseButton2] = "MB2",
+	[Enum.UserInputType.MouseButton3] = "MB3",
+}
+
+local NAME_TO_MOUSE = {}
+for inputType, name in MOUSE_TO_NAME do
+	NAME_TO_MOUSE[name] = inputType
+end
+
+local KEYCODE_TO_NAME = {
+	[Enum.KeyCode.LeftShift] = "LSHIFT",
+	[Enum.KeyCode.RightShift] = "RSHIFT",
+	[Enum.KeyCode.LeftControl] = "LCTRL",
+	[Enum.KeyCode.RightControl] = "RCTRL",
+	[Enum.KeyCode.LeftAlt] = "LALT",
+	[Enum.KeyCode.RightAlt] = "RALT",
+	[Enum.KeyCode.CapsLock] = "CAPS",
+	[Enum.KeyCode.Backspace] = "BKSP",
+	[Enum.KeyCode.Return] = "ENTER",
+	[Enum.KeyCode.Escape] = "ESC",
+	[Enum.KeyCode.Space] = "SPACE",
+	[Enum.KeyCode.Tab] = "TAB",
+	[Enum.KeyCode.Delete] = "DEL",
+	[Enum.KeyCode.Insert] = "INS",
+	[Enum.KeyCode.PageUp] = "PGUP",
+	[Enum.KeyCode.PageDown] = "PGDN",
+	[Enum.KeyCode.Up] = "UP",
+	[Enum.KeyCode.Down] = "DOWN",
+	[Enum.KeyCode.Left] = "LEFT",
+	[Enum.KeyCode.Right] = "RIGHT",
+	[Enum.KeyCode.Semicolon] = ";",
+	[Enum.KeyCode.Quote] = "'",
+	[Enum.KeyCode.Comma] = ",",
+	[Enum.KeyCode.Period] = ".",
+	[Enum.KeyCode.Slash] = "/",
+	[Enum.KeyCode.BackSlash] = "\\",
+	[Enum.KeyCode.LeftBracket] = "[",
+	[Enum.KeyCode.RightBracket] = "]",
+	[Enum.KeyCode.Minus] = "-",
+	[Enum.KeyCode.Equals] = "=",
+	[Enum.KeyCode.Backquote] = "`",
+}
+
+local NAME_TO_KEYCODE = {}
+for keyCode, name in KEYCODE_TO_NAME do
+	NAME_TO_KEYCODE[name] = keyCode
+end
+
+--- Short, uppercase, fixed-width-friendly name for an InputObject.
+--- Returns nil for inputs that make no sense as a bind (movement, focus, etc).
+function Util.InputName(input)
+	if typeof(input) ~= "Instance" then
+		return nil
+	end
+
+	-- InputObject is not in the shared Instance surface; widen deliberately.
+	local object = input :: any
+
+	local mouse = MOUSE_TO_NAME[object.UserInputType]
+	if mouse then
+		return mouse
+	end
+
+	if object.UserInputType ~= Enum.UserInputType.Keyboard then
+		return nil
+	end
+
+	local keyCode = object.KeyCode
+	-- Compared by name: Enum.KeyCode.Unknown is absent from the published
+	-- API dump even though it exists at runtime.
+	if keyCode.Name == "Unknown" then
+		return nil
+	end
+
+	local alias = KEYCODE_TO_NAME[keyCode]
+	if alias then
+		return alias
+	end
+
+	return keyCode.Name:upper()
+end
+
+--- Resolves a bind name to a KeyCode.
+---
+--- Each candidate gets its OWN pcall on purpose: indexing an Enum with a member
+--- that does not exist THROWS, so evaluating `Enum.KeyCode[a] or Enum.KeyCode[b]`
+--- inside one pcall makes `b` unreachable the moment `a` is not exact.
+function Util.KeyCodeFromName(name)
+	if type(name) ~= "string" or name == "" then
+		return nil
+	end
+
+	local direct = NAME_TO_KEYCODE[name:upper()]
+	if direct then
+		return direct
+	end
+
+	-- FromName returns nil instead of throwing, where the client provides it.
+	local ok, fromName = pcall(function()
+		return (Enum.KeyCode :: any):FromName(name)
+	end)
+	if ok and typeof(fromName) == "EnumItem" then
+		return fromName
+	end
+
+	local candidates = {
+		name,
+		name:sub(1, 1):upper() .. name:sub(2):lower(),
+		name:upper(),
+	}
+
+	for _, candidate in candidates do
+		local success, resolved = pcall(function()
+			return (Enum.KeyCode :: any)[candidate]
+		end)
+		if success and typeof(resolved) == "EnumItem" then
+			return resolved
+		end
+	end
+
+	return nil
+end
+
+--- Folds a user-written bind name onto the exact spelling Util.InputName
+--- produces, so "INSERT", "Insert" and "INS" all match a real Insert press.
+--- Every bind comparison must go through this -- comparing raw strings is what
+--- made the default menu hotkey silently dead.
+function Util.CanonicalName(name)
+	if type(name) ~= "string" or name == "" then
+		return nil
+	end
+
+	local upper = name:upper()
+	if NAME_TO_MOUSE[upper] or NAME_TO_KEYCODE[upper] then
+		return upper
+	end
+
+	local keyCode = Util.KeyCodeFromName(name)
+	if keyCode then
+		return KEYCODE_TO_NAME[keyCode] or keyCode.Name:upper()
+	end
+
+	return upper
+end
+
+function Util.MouseTypeFromName(name)
+	return NAME_TO_MOUSE[name]
+end
+
+--- True while the named bind is physically held.
+function Util.IsHeld(rawName)
+	local name = Util.CanonicalName(rawName)
+	if not name or name == "NONE" then
+		return false
+	end
+
+	local mouse = NAME_TO_MOUSE[name]
+	if mouse then
+		local ok, held = pcall(function()
+			return UserInputService:IsMouseButtonPressed(mouse)
+		end)
+		return ok and held or false
+	end
+
+	local keyCode = Util.KeyCodeFromName(name)
+	if not keyCode then
+		return false
+	end
+
+	local ok, held = pcall(function()
+		return UserInputService:IsKeyDown(keyCode)
+	end)
+	return ok and held or false
+end
+
+--- Does this input match the bind name? Handles mouse and keyboard alike.
+function Util.InputMatches(input, rawName)
+	local name = Util.CanonicalName(rawName)
+	if not name then
+		return false
+	end
+
+	local object = input :: any
+
+	local mouse = NAME_TO_MOUSE[name]
+	if mouse then
+		return object.UserInputType == mouse
+	end
+
+	if object.UserInputType ~= Enum.UserInputType.Keyboard then
+		return false
+	end
+
+	return Util.InputName(input) == name
+end
+
+--==============================================================
+-- geometry
+--==============================================================
+
+function Util.MousePosition()
+	return UserInputService:GetMouseLocation()
+end
+
+--- Sable's ScreenGui uses IgnoreGuiInset = false, which puts AbsolutePosition
+--- in the same space GetMouseLocation reports. Do NOT add inset math here --
+--- it is only needed when the ScreenGui ignores the inset.
+function Util.MouseOver(guiObject, expand)
+	if not guiObject or not guiObject.Visible then
+		return false
+	end
+
+	expand = expand or 0
+
+	local mouse = UserInputService:GetMouseLocation()
+	local x, y = mouse.X, mouse.Y
+
+	local pos = guiObject.AbsolutePosition
+	local size = guiObject.AbsoluteSize
+
+	return x >= pos.X - expand
+		and x <= pos.X + size.X + expand
+		and y >= pos.Y - expand
+		and y <= pos.Y + size.Y + expand
+end
+
+--==============================================================
+-- tween
+--==============================================================
+
+-- Mechanical, not bouncy. Instruments do not ease-in-out.
+Util.FastInfo = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+Util.SlowInfo = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+function Util.Tween(instance, props, info)
+	local tween = TweenService:Create(instance, info or Util.FastInfo, props)
+	tween:Play()
+	return tween
+end
+
+--==============================================================
+-- tables
+--==============================================================
+
+function Util.Find(list, value)
+	for index, item in list do
+		if item == value then
+			return index
+		end
+	end
+	return nil
+end
+
+function Util.Count(dict)
+	local count = 0
+	for _ in dict do
+		count += 1
+	end
+	return count
+end
+
+--- typeof, not type: Roblox datatypes (Color3, UDim2, ...) must be returned by
+--- reference, never walked as plain tables.
+function Util.DeepCopy(value)
+	if typeof(value) ~= "table" then
+		return value
+	end
+	local copy = {}
+	for key, item in value do
+		copy[key] = Util.DeepCopy(item)
+	end
+	return copy
+end
+
+function Util.SortedKeys(dict)
+	local keys = {}
+	for key in dict do
+		table.insert(keys, key)
+	end
+	table.sort(keys, function(a, b)
+		return tostring(a) < tostring(b)
+	end)
+	return keys
+end
+
+--==============================================================
+-- filesystem
+--==============================================================
+
+local FS = {}
+Util.FS = FS
+
+--- Every call is pcall'd and returns a sensible default, so a menu running
+--- outside an executor degrades to "configs just don't persist".
+local function fsCall(name, default, ...)
+	local fn = Util.Global(name)
+	if type(fn) ~= "function" then
+		return default
+	end
+	local ok, result = pcall(fn, ...)
+	if not ok then
+		return default
+	end
+	if result == nil then
+		return default
+	end
+	return result
+end
+
+function FS.Available()
+	return type(Util.Global("writefile")) == "function"
+		and type(Util.Global("readfile")) == "function"
+		and type(Util.Global("isfolder")) == "function"
+end
+
+function FS.IsFolder(path)
+	return fsCall("isfolder", false, path) == true
+end
+
+function FS.IsFile(path)
+	return fsCall("isfile", false, path) == true
+end
+
+function FS.MakeFolder(path)
+	if FS.IsFolder(path) then
+		return true
+	end
+	fsCall("makefolder", nil, path)
+	return FS.IsFolder(path)
+end
+
+--- Creates every segment of `a/b/c`, not just the leaf.
+function FS.EnsureFolder(path)
+	local built = nil
+	for segment in tostring(path):gmatch("[^/\\]+") do
+		built = built and (built .. "/" .. segment) or segment
+		FS.MakeFolder(built)
+	end
+	return built ~= nil and FS.IsFolder(path)
+end
+
+function FS.Read(path)
+	if not FS.IsFile(path) then
+		return nil
+	end
+	local contents = fsCall("readfile", nil, path)
+	return type(contents) == "string" and contents or nil
+end
+
+function FS.Write(path, contents)
+	local fn = Util.Global("writefile")
+	if type(fn) ~= "function" then
+		return false
+	end
+	return (pcall(fn, path, contents))
+end
+
+function FS.Delete(path)
+	if not FS.IsFile(path) then
+		return false
+	end
+	local fn = Util.Global("delfile")
+	if type(fn) ~= "function" then
+		return false
+	end
+	return (pcall(fn, path))
+end
+
+function FS.List(path)
+	if not FS.IsFolder(path) then
+		return {}
+	end
+	local entries = fsCall("listfiles", {}, path)
+	return type(entries) == "table" and entries or {}
+end
+
+--- Strips directory and extension: "cfgs/main.json" -> "main"
+function FS.Stem(path, extension)
+	local name = tostring(path):match("[^/\\]+$") or tostring(path)
+	if extension then
+		name = name:gsub("%" .. extension .. "$", "")
+	end
+	return name
+end
+
+function FS.ReadJSON(path)
+	local contents = FS.Read(path)
+	if not contents then
+		return nil
+	end
+	local ok, decoded = pcall(function()
+		return HttpService:JSONDecode(contents)
+	end)
+	if ok and type(decoded) == "table" then
+		return decoded
+	end
+	return nil
+end
+
+function FS.WriteJSON(path, data)
+	local ok, encoded = pcall(function()
+		return HttpService:JSONEncode(data)
+	end)
+	if not ok then
+		return false
+	end
+	return FS.Write(path, encoded)
+end
+
+function Util.SetClipboard(text)
+	local fn = Util.Global("setclipboard") or Util.Global("toclipboard")
+	if type(fn) ~= "function" then
+		return false
+	end
+	return (pcall(fn, text))
+end
+
+return Util
+end
+
+__modules["Window"] = function()
+
+-- Sable :: Window
+--
+-- Window chrome plus the container object model: window -> tab -> column ->
+-- groupbox / tabbox / dependency box.
+--
+-- Every container type is built from ONE metatable, so elements/init installs
+-- its Add* constructors a single time and groupboxes, tabbox tabs and
+-- dependency boxes all gain them together. Containers never measure their own
+-- children: they read UIListLayout.AbsoluteContentSize and resize from that,
+-- which is why an element only has to create its row.
+
+local Util = require("Util")
+local Elements = require("elements/init")
+
+local Window = {}
+
+function Window.Install(Library)
+	local Sizes = Library.Sizes
+
+	-- How far a groupbox header reaches inside the box whose hairline it cuts.
+	local HeaderDrop = math.ceil(Sizes.GroupHeader / 2)
+	-- Groupbox content starts clear of that header, then a half pad of air.
+	local GroupTop = HeaderDrop + math.floor(Sizes.GroupPad / 2)
+	-- A column must reserve room above its first groupbox for the header that
+	-- overhangs it, or the ScrollingFrame clips the header in half.
+	local ColumnTop = HeaderDrop + Sizes.RowGap
+	local ChromeHeight = Sizes.TitleBar + Sizes.TabStrip
+	local HalfGap = math.ceil(Sizes.ColumnGap / 2)
+	local TabboxStrip = Sizes.RowHeight
+	local TitlePad = Sizes.GroupPad + Sizes.Tick -- clears the corner ticks
+
+	-- Square scrollbar caps. The stock end textures are rounded, which is the
+	-- one place Roblox would sneak a radius into the menu.
+	local FLAT_SCROLL = "rbxasset://textures/ui/Scroll/scroll-middle.png"
+
+	--- Swaps an instance's themed colours without stacking registry entries.
+	--- Always pass the FULL map: the old entry is dropped wholesale.
+	local function retheme(instance, properties)
+		Library:RemoveFromRegistry(instance)
+		Library:AddToRegistry(instance, properties)
+	end
+
+	local function hairline(parent, y, colorKey, zIndex)
+		return Library:Create("Frame", {
+			Name = "Rule",
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(0, y),
+			Size = UDim2.new(1, 0, 0, Sizes.Outline),
+			ZIndex = zIndex or 1,
+			Theme = { BackgroundColor3 = colorKey },
+			Parent = parent,
+		})
+	end
+
+	--==============================================================
+	-- containers
+	--==============================================================
+
+	-- Forward declarations: the container methods below close over these.
+	local newDependencyBox
+
+	local Container = {}
+	Container.__index = Container
+
+	--- Recompute this container's height, then let whatever owns it do the
+	--- same. Idempotent, so calling it when nothing changed costs one layout
+	--- read and stops.
+	function Container:Resize()
+		if self.Recompute then
+			self:Recompute()
+		end
+
+		local owner = self.Owner
+		if owner and owner.Resize then
+			owner:Resize()
+		end
+
+		return self
+	end
+
+	function Container:AddDependencyBox()
+		return newDependencyBox(self)
+	end
+
+	Elements.Install(Library, Container)
+
+	local function newContainer(frame, owner)
+		return setmetatable({
+			Library = Library,
+			Container = frame,
+			Elements = {},
+			Owner = owner,
+		}, Container)
+	end
+
+	--==============================================================
+	-- dependency box
+	--==============================================================
+
+	function newDependencyBox(parent)
+		local frame = Library:Create("Frame", {
+			Name = "DependencyBox",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ClipsDescendants = true,
+			Size = UDim2.new(1, 0, 0, 0),
+			Visible = false,
+			Parent = parent.Container,
+		})
+
+		local layout = Util.ListLayout(frame, Sizes.RowGap)
+
+		local box = newContainer(frame, parent)
+		box.Type = "DependencyBox"
+		box.Frame = frame
+		box.Layout = layout
+		box.Dependencies = {}
+		box.Shown = false
+
+		-- The box occupies a slot in its parent's list, so it must occupy one in
+		-- Elements too -- otherwise the next element reuses its LayoutOrder.
+		-- Base.Create appends before Library:Row reads the count, so a slot's
+		-- LayoutOrder is its index + 1; match that exactly or the box ties with
+		-- the element above it.
+		table.insert(parent.Elements, box)
+		frame.LayoutOrder = #parent.Elements + 1
+
+		function box:Recompute()
+			frame.Visible = self.Shown
+			frame.Size = UDim2.new(1, 0, 0, self.Shown and math.ceil(layout.AbsoluteContentSize.Y) or 0)
+		end
+
+		function box:Evaluate()
+			local shown = true
+
+			for _, pair in self.Dependencies do
+				local element = pair[1]
+				if not element or element.Value ~= pair[2] then
+					shown = false
+					break
+				end
+			end
+
+			self.Shown = shown
+			self:Resize()
+
+			return shown
+		end
+
+		--- list is { { element, expectedValue }, ... }; the box is visible only
+		--- while every pair matches.
+		function box:SetupDependencies(list)
+			self.Dependencies = list or {}
+
+			for _, pair in self.Dependencies do
+				local element = pair[1]
+				if element and element.OnChanged then
+					element:OnChanged(function()
+						box:Evaluate()
+					end)
+				end
+			end
+
+			self:Evaluate()
+			return self
+		end
+
+		Library:GiveSignal(layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+			box:Resize()
+		end))
+
+		return box
+	end
+
+	--==============================================================
+	-- groupbox
+	--==============================================================
+
+	local function newGroupbox(tab, side, name)
+		local column = side == "Right" and tab.Right or tab.Left
+		tab.Order[side] += 1
+
+		local frame = Library:Panel({
+			Name = "Groupbox",
+			Size = UDim2.new(1, 0, 0, Sizes.GroupHeader + Sizes.GroupPad),
+			LayoutOrder = tab.Order[side],
+			Parent = column,
+		}, "Panel", "Outline")
+
+		-- Signature detail: the title interrupts the top hairline rather than
+		-- sitting inside the box. An opaque Background fill over a higher ZIndex
+		-- makes the cut; the padding sets how wide the gap in the line is.
+		local header = Library:Create("TextLabel", {
+			Name = "Header",
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.fromOffset(Sizes.GroupPad, 0),
+			-- Height is the width of the CUT in the hairline, not the text box.
+			-- Roblox draws TextLabel text outside its frame, so the caption is
+			-- unaffected. At Sizes.GroupHeader (18) the opaque fill spanned
+			-- +/-9px and reached across the GroupGap to punch a hole through
+			-- the bottom hairline of the groupbox above.
+			Size = UDim2.new(0, 0, 0, Sizes.GroupPad - 2),
+			AutomaticSize = Enum.AutomaticSize.X,
+			BorderSizePixel = 0,
+			Font = Library.Fonts.Title,
+			Text = Library:Chrome(name or ""),
+			TextSize = Sizes.TextSmall,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 4,
+			Theme = { BackgroundColor3 = "Background", TextColor3 = "FontDim" },
+			Parent = frame,
+		})
+		Util.Padding(header, 0, 4, 0, 4)
+
+		local content = Library:Create("Frame", {
+			Name = "Content",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.fromScale(1, 1),
+			Parent = frame,
+		})
+		Util.Padding(content, GroupTop, Sizes.GroupPad, Sizes.GroupPad, Sizes.GroupPad)
+
+		local layout = Util.ListLayout(content, Sizes.RowGap)
+
+		local box = newContainer(content, nil)
+		box.Type = "Groupbox"
+		box.Frame = frame
+		box.Header = header
+		box.Layout = layout
+
+		function box:Recompute()
+			local height = layout.AbsoluteContentSize.Y + GroupTop + Sizes.GroupPad
+			frame.Size = UDim2.new(1, 0, 0, math.ceil(height))
+		end
+
+		function box:SetTitle(text)
+			header.Text = Library:Chrome(text or "")
+			return self
+		end
+
+		Library:GiveSignal(layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+			box:Resize()
+		end))
+
+		table.insert(tab.Boxes, box)
+		box:Recompute()
+
+		return box
+	end
+
+	--==============================================================
+	-- tabbox
+	--==============================================================
+
+	local function newTabbox(tab, side)
+		local column = side == "Right" and tab.Right or tab.Left
+		tab.Order[side] += 1
+
+		local shell = Library:Panel({
+			Name = "Tabbox",
+			Size = UDim2.new(1, 0, 0, TabboxStrip + Sizes.GroupPad * 2),
+			LayoutOrder = tab.Order[side],
+			Parent = column,
+		}, "Panel", "Outline")
+
+		local strip = Library:Create("Frame", {
+			Name = "Strip",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.new(1, 0, 0, TabboxStrip),
+			ZIndex = 2,
+			Parent = shell,
+		})
+
+		hairline(shell, TabboxStrip - Sizes.Outline, "OutlineDim", 1)
+
+		local indicator = Library:Create("Frame", {
+			Name = "Indicator",
+			AnchorPoint = Vector2.new(0, 1),
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 0, 1, 0),
+			Size = UDim2.new(0, 0, 0, Sizes.Indicator),
+			Visible = false,
+			ZIndex = 3,
+			Theme = { BackgroundColor3 = "Accent" },
+			Parent = strip,
+		})
+
+		local tabbox = {
+			Library = Library,
+			Frame = shell,
+			Tabs = {},
+			Active = nil,
+		}
+
+		local function resizeShell()
+			local active = tabbox.Active
+			local inner = active and active.Layout.AbsoluteContentSize.Y or 0
+			shell.Size = UDim2.new(1, 0, 0, math.ceil(TabboxStrip + inner + Sizes.GroupPad * 2))
+		end
+
+		local function placeIndicator(animate)
+			local count = #tabbox.Tabs
+			local index = tabbox.Active and table.find(tabbox.Tabs, tabbox.Active) or nil
+
+			if not index or count == 0 then
+				indicator.Visible = false
+				return
+			end
+
+			indicator.Visible = true
+
+			local position = UDim2.new((index - 1) / count, 0, 1, 0)
+			local size = UDim2.new(1 / count, 0, 0, Sizes.Indicator)
+
+			if animate then
+				Library:Tween(indicator, { Position = position, Size = size }, Library.Motion.Fast)
+			else
+				indicator.Position = position
+				indicator.Size = size
+			end
+		end
+
+		local function layoutButtons()
+			local count = #tabbox.Tabs
+			if count == 0 then
+				return
+			end
+
+			for index, entry in tabbox.Tabs do
+				entry.Button.Position = UDim2.new((index - 1) / count, 0, 0, 0)
+				entry.Button.Size = UDim2.new(1 / count, 0, 1, 0)
+			end
+
+			placeIndicator(false)
+		end
+
+		function tabbox:SetTab(target)
+			if not target then
+				return self
+			end
+
+			for _, entry in self.Tabs do
+				local on = entry == target
+				entry.Container.Visible = on
+				retheme(entry.Label, { TextColor3 = on and "Font" or "FontDim" })
+			end
+
+			-- Slide the underline only if it was already somewhere; the first
+			-- placement should not animate in from zero width.
+			local placed = indicator.Visible
+
+			self.Active = target
+			placeIndicator(placed)
+			target:Resize()
+
+			return self
+		end
+
+		function tabbox:AddTab(name)
+			local content = Library:Create("Frame", {
+				Name = "Tab",
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Position = UDim2.fromOffset(0, TabboxStrip),
+				Size = UDim2.new(1, 0, 1, -TabboxStrip),
+				Visible = false,
+				Parent = shell,
+			})
+			Util.Padding(content, Sizes.GroupPad, Sizes.GroupPad, Sizes.GroupPad, Sizes.GroupPad)
+
+			local layout = Util.ListLayout(content, Sizes.RowGap)
+
+			-- The label is a separate instance so switching tabs can retheme the
+			-- text without wiping the button's hover colour out of the registry.
+			local button = Library:Create("TextButton", {
+				Name = "Button",
+				AutoButtonColor = false,
+				BorderSizePixel = 0,
+				Position = UDim2.fromScale(0, 0),
+				Size = UDim2.new(1, 0, 1, 0),
+				Text = "",
+				Theme = { BackgroundColor3 = "Panel" },
+				Parent = strip,
+			})
+
+			local label = Library:Label({
+				Name = "Label",
+				Font = Library.Fonts.Title,
+				Size = UDim2.fromScale(1, 1),
+				Text = Library:Chrome(name or ""),
+				TextSize = Sizes.TextSmall,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				Parent = button,
+			}, "FontDim")
+
+			Library:BindHover(button, button, "Panel", "PanelRaised")
+
+			local entry = newContainer(content, nil)
+			entry.Type = "TabboxTab"
+			entry.Name = name
+			entry.Button = button
+			entry.Label = label
+			entry.Layout = layout
+			entry.Tabbox = tabbox
+
+			function entry:Recompute()
+				resizeShell()
+			end
+
+			table.insert(tabbox.Tabs, entry)
+			table.insert(tab.Boxes, entry)
+
+			Library:GiveSignal(layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+				entry:Resize()
+			end))
+
+			Library:GiveSignal(button.MouseButton1Click:Connect(function()
+				tabbox:SetTab(entry)
+			end))
+
+			layoutButtons()
+
+			if #tabbox.Tabs == 1 then
+				tabbox:SetTab(entry)
+			end
+
+			return entry
+		end
+
+		resizeShell()
+
+		return tabbox
+	end
+
+	--==============================================================
+	-- tab
+	--==============================================================
+
+	local function newColumn(page, side)
+		local isLeft = side == "Left"
+
+		local column = Library:Create("ScrollingFrame", {
+			Name = side,
+			-- Active so touch drag-scrolling works; the mouse wheel does not
+			-- care either way.
+			Active = true,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			BottomImage = FLAT_SCROLL,
+			CanvasSize = UDim2.fromOffset(0, 0),
+			ElasticBehavior = Enum.ElasticBehavior.Never,
+			Position = isLeft and UDim2.fromScale(0, 0) or UDim2.new(0.5, HalfGap, 0, 0),
+			ScrollBarImageTransparency = 0,
+			ScrollBarThickness = Sizes.ScrollBar,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			Size = UDim2.new(0.5, -HalfGap, 1, 0),
+			TopImage = FLAT_SCROLL,
+			VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
+			Theme = { ScrollBarImageColor3 = "Outline" },
+			Parent = page,
+		})
+
+		-- Side padding is a hairline wide so a groupbox's UIStroke, which draws
+		-- outside the frame, is not eaten by the ScrollingFrame's clipping.
+		Util.Padding(column, ColumnTop, Sizes.Outline, Sizes.GroupGap, Sizes.Outline)
+		Util.ListLayout(column, Sizes.GroupGap)
+
+		return column
+	end
+
+	local Tab = {}
+	Tab.__index = Tab
+
+	function Tab:AddLeftGroupbox(name)
+		return newGroupbox(self, "Left", name)
+	end
+
+	function Tab:AddRightGroupbox(name)
+		return newGroupbox(self, "Right", name)
+	end
+
+	function Tab:AddLeftTabbox()
+		return newTabbox(self, "Left")
+	end
+
+	function Tab:AddRightTabbox()
+		return newTabbox(self, "Right")
+	end
+
+	function Tab:Show()
+		self.Window:SetTab(self)
+		return self
+	end
+
+	function Tab:Resize()
+		for _, box in self.Boxes do
+			box:Resize()
+		end
+		return self
+	end
+
+	--==============================================================
+	-- window
+	--==============================================================
+
+	local WindowMeta = {}
+	WindowMeta.__index = WindowMeta
+
+	function WindowMeta:SetTitle(text)
+		self.Title = tostring(text or "")
+		self.TitleLabel.Text = Library:Chrome(self.Title)
+		return self
+	end
+
+	function WindowMeta:SetFooter(text)
+		self.Footer = tostring(text or "")
+		self.FooterLabel.Text = Library:FormatLabel(self.Footer)
+		return self
+	end
+
+	function WindowMeta:PlaceIndicator(animate)
+		local count = #self.Tabs
+		local index = self.ActiveTab and table.find(self.Tabs, self.ActiveTab) or nil
+
+		if not index or count == 0 then
+			self.Indicator.Visible = false
+			return self
+		end
+
+		self.Indicator.Visible = true
+
+		local position = UDim2.new((index - 1) / count, 0, 1, 0)
+		local size = UDim2.new(1 / count, 0, 0, Sizes.Indicator)
+
+		if animate then
+			Library:Tween(self.Indicator, { Position = position, Size = size }, Library.Motion.Fast)
+		else
+			self.Indicator.Position = position
+			self.Indicator.Size = size
+		end
+
+		return self
+	end
+
+	function WindowMeta:LayoutTabs()
+		local count = #self.Tabs
+		if count == 0 then
+			return self
+		end
+
+		for index, tab in self.Tabs do
+			tab.Button.Position = UDim2.new((index - 1) / count, 0, 0, 0)
+			tab.Button.Size = UDim2.new(1 / count, 0, 1, 0)
+		end
+
+		self:PlaceIndicator(false)
+		return self
+	end
+
+	--- Accepts a tab object or a tab name.
+	function WindowMeta:SetTab(target)
+		local resolved = target
+
+		if type(target) == "string" then
+			resolved = nil
+			for _, candidate in self.Tabs do
+				if candidate.Name == target then
+					resolved = candidate
+					break
+				end
+			end
+		end
+
+		if type(resolved) ~= "table" or resolved.Window ~= self then
+			return self
+		end
+
+		Library:ClosePopup()
+
+		-- Only slide the underline when it already had a home.
+		local placed = self.Indicator.Visible
+		self.ActiveTab = resolved
+
+		for _, candidate in self.Tabs do
+			local on = candidate == resolved
+			candidate.Page.Visible = on
+			retheme(candidate.Label, { TextColor3 = on and "Font" or "FontDim" })
+		end
+
+		self:PlaceIndicator(placed)
+		resolved:Resize()
+
+		return self
+	end
+
+	function WindowMeta:AddTab(name)
+		local page = Library:Create("Frame", {
+			Name = "Page",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.fromScale(1, 1),
+			Visible = false,
+			Parent = self.Body,
+		})
+
+		local button = Library:Create("TextButton", {
+			Name = "Tab",
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			Position = UDim2.fromScale(0, 0),
+			Size = UDim2.new(1, 0, 1, 0),
+			Text = "",
+			Theme = { BackgroundColor3 = "Background" },
+			Parent = self.TabStrip,
+		})
+
+		-- Text lives on its own label: SetTab rethemes the label, which would
+		-- otherwise drop the button's hover colour out of the registry with it.
+		local label = Library:Label({
+			Name = "Label",
+			Font = Library.Fonts.Title,
+			Size = UDim2.fromScale(1, 1),
+			Text = Library:Chrome(name or ""),
+			TextSize = Sizes.TextSmall,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Parent = button,
+		}, "FontDim")
+
+		Library:BindHover(button, button, "Background", "Panel")
+
+		local tab = setmetatable({
+			Library = Library,
+			Window = self,
+			Name = name or "",
+			Page = page,
+			Button = button,
+			Label = label,
+			Boxes = {},
+			Order = { Left = 0, Right = 0 },
+		}, Tab)
+
+		tab.Left = newColumn(page, "Left")
+		tab.Right = newColumn(page, "Right")
+
+		table.insert(self.Tabs, tab)
+
+		Library:GiveSignal(button.MouseButton1Click:Connect(function()
+			self:SetTab(tab)
+		end))
+
+		self:LayoutTabs()
+
+		if #self.Tabs == 1 then
+			self:SetTab(tab)
+		end
+
+		return tab
+	end
+
+	--- Library:SetOpen drives this; it is required on every window.
+	function WindowMeta:SetVisible(visible)
+		visible = visible == true
+		self.Shown = visible
+
+		local fade = math.max(tonumber(Library.MenuFadeTime) or 0, 0)
+		local info = TweenInfo.new(fade, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		local goal = visible and 0 or 1
+
+		if visible then
+			self.Frame.Visible = true
+		end
+
+		Library:Tween(self.Frame, { BackgroundTransparency = goal }, info)
+		Library:Tween(self.Stroke, { Transparency = goal }, info)
+		Library:Tween(self.Canvas, { GroupTransparency = goal }, info)
+
+		self.FadeToken += 1
+		local token = self.FadeToken
+
+		if not visible then
+			-- Only hide once this particular fade finishes: a re-open mid-fade
+			-- bumps the token and this delayed call becomes a no-op.
+			task.delay(fade, function()
+				if Library.Unloaded then
+					return
+				end
+				if self.FadeToken == token and not self.Shown then
+					self.Frame.Visible = false
+				end
+			end)
+		end
+
+		return self
+	end
+
+	--==============================================================
+	-- constructor
+	--==============================================================
+
+	function Library:CreateWindow(config)
+		config = config or {}
+
+		if type(config.MenuFadeTime) == "number" then
+			Library.MenuFadeTime = config.MenuFadeTime
+		end
+
+		local sizeUDim = typeof(config.Size) == "UDim2" and config.Size
+			or UDim2.fromOffset(Sizes.WindowWidth, Sizes.WindowHeight)
+
+		local root, stroke = Library:Panel({
+			Name = "Window",
+			Active = true,
+			BackgroundTransparency = 1,
+			ClipsDescendants = true,
+			Position = typeof(config.Position) == "UDim2" and config.Position or UDim2.fromOffset(48, 48),
+			Size = sizeUDim,
+			Visible = false,
+			Parent = Library.WindowHolder,
+		}, "Background", "Outline")
+		stroke.Transparency = 1
+
+		-- Everything except the frame fill and its hairline lives in the canvas,
+		-- so the menu fades as one object instead of a hundred transparencies.
+		local canvas = Library:Create("CanvasGroup", {
+			Name = "Canvas",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			GroupTransparency = 1,
+			Size = UDim2.fromScale(1, 1),
+			Parent = root,
+		})
+
+		Library:CornerTicks(canvas, "Accent")
+
+		local titleBar = Library:Create("Frame", {
+			Name = "TitleBar",
+			Active = true,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.new(1, 0, 0, Sizes.TitleBar),
+			ZIndex = 2,
+			Parent = canvas,
+		})
+
+		local titleLabel = Library:Label({
+			Name = "Title",
+			Font = Library.Fonts.Title,
+			Position = UDim2.fromOffset(TitlePad, 0),
+			Size = UDim2.new(0.62, -TitlePad, 1, 0),
+			Text = Library:Chrome(config.Title or Library.Name),
+			TextSize = Sizes.TextTitle,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Parent = titleBar,
+		}, "Font")
+
+		local footerLabel = Library:Label({
+			Name = "Footer",
+			Position = UDim2.new(0.62, 0, 0, 0),
+			Size = UDim2.new(0.38, -TitlePad, 1, 0),
+			Text = Library:FormatLabel(config.Footer or ("v" .. tostring(Library.Version))),
+			TextSize = Sizes.TextSmall,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			Parent = titleBar,
+		}, "FontDim")
+
+		-- Rules are parented to the canvas, not to the bars, so no padding on a
+		-- bar can ever shorten them.
+		hairline(canvas, Sizes.TitleBar - Sizes.Outline, "Outline", 1)
+		hairline(canvas, ChromeHeight - Sizes.Outline, "OutlineDim", 1)
+
+		local tabStrip = Library:Create("Frame", {
+			Name = "TabStrip",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(0, Sizes.TitleBar),
+			Size = UDim2.new(1, 0, 0, Sizes.TabStrip),
+			ZIndex = 2,
+			Parent = canvas,
+		})
+
+		local indicator = Library:Create("Frame", {
+			Name = "Indicator",
+			AnchorPoint = Vector2.new(0, 1),
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 0, 1, 0),
+			Size = UDim2.new(0, 0, 0, Sizes.Indicator),
+			Visible = false,
+			ZIndex = 3,
+			Theme = { BackgroundColor3 = "Accent" },
+			Parent = tabStrip,
+		})
+
+		local body = Library:Create("Frame", {
+			Name = "Body",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(0, ChromeHeight),
+			Size = UDim2.new(1, 0, 1, -ChromeHeight),
+			Parent = canvas,
+		})
+		Util.Padding(body, Sizes.RowGap, Sizes.GroupPad, Sizes.GroupPad, Sizes.GroupPad)
+
+		local window = setmetatable({
+			Library = Library,
+			Frame = root,
+			Stroke = stroke,
+			Canvas = canvas,
+			TitleBar = titleBar,
+			TitleLabel = titleLabel,
+			FooterLabel = footerLabel,
+			TabStrip = tabStrip,
+			Indicator = indicator,
+			Body = body,
+			Tabs = {},
+			ActiveTab = nil,
+			Title = tostring(config.Title or Library.Name),
+			Footer = tostring(config.Footer or ("v" .. tostring(Library.Version))),
+			Shown = false,
+			FadeToken = 0,
+		}, WindowMeta)
+
+		Library:MakeDraggable(titleBar, root)
+
+		if config.Center and not (typeof(config.Position) == "UDim2") then
+			-- AbsoluteSize is still zero this frame, so centre from the intended
+			-- size and retry once the layout has run if the viewport is not up yet.
+			local function centre()
+				local viewport = Library.ScreenGui.AbsoluteSize
+				if viewport.X <= 0 or viewport.Y <= 0 then
+					return false
+				end
+
+				local width = sizeUDim.X.Scale * viewport.X + sizeUDim.X.Offset
+				local height = sizeUDim.Y.Scale * viewport.Y + sizeUDim.Y.Offset
+
+				root.Position = UDim2.fromOffset(
+					math.floor((viewport.X - width) / 2),
+					math.floor((viewport.Y - height) / 2)
+				)
+				return true
+			end
+
+			if not centre() then
+				-- The ScreenGui has not been measured yet; try again each frame
+				-- until it has, then stop.
+				local connection
+				connection = Library:GiveSignal(Library.RenderStepped:Connect(function()
+					if Library.Unloaded or centre() then
+						connection:Disconnect()
+					end
+				end))
+			end
+		end
+
+		if config.Resizable ~= false then
+			local grip = Library:Create("Frame", {
+				Name = "Grip",
+				AnchorPoint = Vector2.new(1, 1),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Position = UDim2.new(1, -3, 1, -3),
+				Size = UDim2.fromOffset(16, 16),
+				ZIndex = 11,
+				Parent = canvas,
+			})
+
+			for index, length in { 9, 5 } do
+				Library:Create("Frame", {
+					Name = ("Mark%d"):format(index),
+					AnchorPoint = Vector2.new(1, 1),
+					BorderSizePixel = 0,
+					Position = UDim2.new(1, 0, 1, -(index - 1) * 3),
+					Size = UDim2.fromOffset(length, Sizes.Outline),
+					ZIndex = 11,
+					Theme = { BackgroundColor3 = "Outline" },
+					Parent = grip,
+				})
+			end
+
+			local hit = Library:HitButton(grip, { ZIndex = 12 })
+
+			local resizing = false
+			local startMouse = Vector2.zero
+			local startSize = Vector2.zero
+
+			Library:GiveSignal(hit.InputBegan:Connect(function(input)
+				if
+					input.UserInputType ~= Enum.UserInputType.MouseButton1
+					and input.UserInputType ~= Enum.UserInputType.Touch
+				then
+					return
+				end
+				resizing = true
+				startMouse = Util.MousePosition()
+				startSize = root.AbsoluteSize
+				Library:ClosePopup()
+			end))
+
+			Library:GiveSignal(Library.InputChanged:Connect(function(input)
+				if not resizing then
+					return
+				end
+				if
+					input.UserInputType ~= Enum.UserInputType.MouseMovement
+					and input.UserInputType ~= Enum.UserInputType.Touch
+				then
+					return
+				end
+
+				local delta = Util.MousePosition() - startMouse
+				local viewport = Library.ScreenGui.AbsoluteSize
+
+				local width = Util.Clamp(
+					startSize.X + delta.X,
+					Sizes.WindowMinWidth,
+					math.max(Sizes.WindowMinWidth, viewport.X)
+				)
+				local height = Util.Clamp(
+					startSize.Y + delta.Y,
+					Sizes.WindowMinHeight,
+					math.max(Sizes.WindowMinHeight, viewport.Y)
+				)
+
+				root.Size = UDim2.fromOffset(math.floor(width), math.floor(height))
+			end))
+
+			Library:GiveSignal(Library.InputEnded:Connect(function(input)
+				if
+					input.UserInputType == Enum.UserInputType.MouseButton1
+					or input.UserInputType == Enum.UserInputType.Touch
+				then
+					resizing = false
+				end
+			end))
+		end
+
+		table.insert(Library.Windows, window)
+
+		if config.AutoShow then
+			Library:SetOpen(true)
+		end
+
+		return window
+	end
+end
+
+return Window
+end
+
+__modules["addons/SaveManager"] = function()
+
+-- Sable :: addons/SaveManager
+--
+-- Serialises Library.Toggles + Library.Options by index to
+-- <folder>/settings/<name>.json, and rebuilds them by calling :SetValue so the
+-- script's own callbacks run exactly as if the user had clicked.
+--
+-- Reached as Library.SaveManager -- the spine calls :SetLibrary for you; the
+-- method survives being called again so ported scripts keep working. Every
+-- filesystem call goes through Util.FS, which no-ops outside an executor, so
+-- the buttons still respond there -- they just report that nothing was written.
+
+local Util = require("Util")
+
+local NAME_INDEX = "SaveManager_ConfigName"
+local LIST_INDEX = "SaveManager_ConfigList"
+
+--- Fallback for :IgnoreThemeSettings when the ThemeManager is not reachable.
+local THEME_INDEXES = {
+	"ThemeManager_ThemeList",
+	"ThemeManager_AccentColor",
+	"ThemeManager_BackgroundColor",
+	"ThemeManager_PanelColor",
+	"ThemeManager_OutlineColor",
+	"ThemeManager_FontColor",
+}
+
+local SaveManager = {}
+
+SaveManager.Library = nil :: any
+SaveManager.Folder = "Sable"
+SaveManager.AutoloadName = nil :: any
+SaveManager.Indexes = { NAME_INDEX, LIST_INDEX }
+
+--- index -> true. Its own two controls are always skipped: a config that
+--- restored the config picker would fight with the user.
+SaveManager.Ignore = {
+	[NAME_INDEX] = true,
+	[LIST_INDEX] = true,
+}
+
+--- Elements built by :BuildConfigSection.
+SaveManager.Objects = {}
+
+--==============================================================
+-- serialisation
+--==============================================================
+
+--- Element -> plain JSON-safe entry, or nil for types configs do not carry.
+local function serialize(index, element)
+	local kind = element.Type
+
+	if kind == "Toggle" then
+		return { type = "Toggle", idx = index, value = element.Value == true }
+	elseif kind == "Slider" then
+		local number = tonumber(element.Value)
+		if not number then
+			return nil
+		end
+		return { type = "Slider", idx = index, value = number }
+	elseif kind == "Input" then
+		return { type = "Input", idx = index, value = tostring(element.Value or "") }
+	elseif kind == "Dropdown" then
+		local value = element.Value
+
+		if type(value) == "table" then
+			local set = {}
+			for name, on in value do
+				if on then
+					set[tostring(name)] = true
+				end
+			end
+			return { type = "Dropdown", idx = index, multi = true, value = set }
+		end
+
+		-- AllowNull dropdowns need the empty selection to survive a round trip,
+		-- and JSON has no way to store a nil field.
+		if value == nil then
+			return { type = "Dropdown", idx = index, multi = false, null = true, value = "" }
+		end
+
+		return { type = "Dropdown", idx = index, multi = false, value = tostring(value) }
+	elseif kind == "ColorPicker" then
+		if typeof(element.Value) ~= "Color3" then
+			return nil
+		end
+		return {
+			type = "ColorPicker",
+			idx = index,
+			value = {
+				hex = Util.ToHex(element.Value),
+				transparency = tonumber(element.Transparency),
+			},
+		}
+	elseif kind == "KeyPicker" then
+		return {
+			type = "KeyPicker",
+			idx = index,
+			value = {
+				key = tostring(element.Value or "None"),
+				mode = tostring(element.Mode or "Toggle"),
+			},
+		}
+	end
+
+	return nil
+end
+
+--- Entry -> element, through :SetValue so callbacks fire. Returns false when
+--- the payload is malformed; the caller skips it silently.
+local function deserialize(element, entry)
+	local kind = element.Type
+	local value = entry.value
+
+	if kind == "Toggle" then
+		if type(value) ~= "boolean" then
+			return false
+		end
+		element:SetValue(value)
+	elseif kind == "Slider" then
+		local number = tonumber(value)
+		if not number then
+			return false
+		end
+		element:SetValue(number)
+	elseif kind == "Input" then
+		if type(value) ~= "string" then
+			return false
+		end
+		element:SetValue(value)
+	elseif kind == "Dropdown" then
+		if type(value) == "table" then
+			local set = {}
+			for name, on in value do
+				if on then
+					set[tostring(name)] = true
+				end
+			end
+			element:SetValue(set)
+		elseif entry.null == true then
+			element:SetValue(nil)
+		elseif type(value) == "string" then
+			element:SetValue(value)
+		else
+			return false
+		end
+	elseif kind == "ColorPicker" then
+		if type(value) ~= "table" then
+			return false
+		end
+
+		local color = Util.FromHex(value.hex or value[1])
+		if not color then
+			return false
+		end
+
+		-- Transparency rides along with the colour, so stage it before the
+		-- repaint that :SetValue triggers.
+		local transparency = tonumber(value.transparency or value[2])
+		if transparency and element.Transparency ~= nil then
+			if type(element.SetTransparency) == "function" then
+				element:SetTransparency(transparency)
+			else
+				element.Transparency = transparency
+			end
+		end
+
+		element:SetValue(color)
+	elseif kind == "KeyPicker" then
+		if type(value) ~= "table" then
+			return false
+		end
+
+		local key = value.key or value[1]
+		if type(key) ~= "string" then
+			return false
+		end
+
+		local mode = value.mode or value[2]
+		element:SetValue({ key, type(mode) == "string" and mode or element.Mode })
+	else
+		return false
+	end
+
+	return true
+end
+
+--==============================================================
+-- plumbing
+--==============================================================
+
+local function notify(Library, description, kind)
+	if not Library or not Library.Notify then
+		return
+	end
+	Library:Notify({
+		Title = "Config",
+		Description = description,
+		Time = 4,
+		Good = kind == "good",
+		Risk = kind == "risk",
+	})
+end
+
+function SaveManager:SetLibrary(Library)
+	if type(Library) ~= "table" then
+		return self
+	end
+	self.Library = Library
+	return self
+end
+
+function SaveManager:SetFolder(path)
+	if type(path) == "string" and path ~= "" then
+		self.Folder = path
+	end
+	self:BuildFolders()
+	return self
+end
+
+function SaveManager:SettingsFolder()
+	return self.Folder .. "/settings"
+end
+
+function SaveManager:ConfigPath(name)
+	return ("%s/%s.json"):format(self:SettingsFolder(), name)
+end
+
+function SaveManager:AutoloadPath()
+	return self:SettingsFolder() .. "/autoload.txt"
+end
+
+function SaveManager:BuildFolders()
+	if not Util.FS.Available() then
+		return false
+	end
+	return Util.FS.EnsureFolder(self:SettingsFolder())
+end
+
+--- Accepts either an array of indexes or a set; both forms show up in scripts
+--- ported from other libraries.
+function SaveManager:SetIgnoreIndexes(list)
+	if type(list) ~= "table" then
+		return self
+	end
+
+	for key, value in list do
+		if type(key) == "number" then
+			if value ~= nil then
+				self.Ignore[value] = true
+			end
+		else
+			self.Ignore[key] = value == true
+		end
+	end
+
+	return self
+end
+
+function SaveManager:IgnoreThemeSettings()
+	local manager = self.Library and self.Library.ThemeManager
+	local indexes = (type(manager) == "table" and type(manager.Indexes) == "table") and manager.Indexes
+		or THEME_INDEXES
+
+	for _, index in indexes do
+		self.Ignore[index] = true
+	end
+
+	return self
+end
+
+--- Config names become file names, so anything that could walk out of the
+--- settings folder is stripped rather than rejected. Leading dots go too:
+--- "../../evil" has to land on "evil", not on a hidden file.
+function SaveManager:Sanitize(name)
+	if type(name) ~= "string" then
+		return nil
+	end
+
+	name = name:gsub("[^%w%-%. _]", "")
+	name = name:gsub("^[%.%s]+", ""):gsub("[%.%s]+$", "")
+
+	if name == "" or name == "autoload" then
+		return nil
+	end
+
+	return name
+end
+
+--==============================================================
+-- config data
+--==============================================================
+
+function SaveManager:Collect()
+	local Library = self.Library
+	local objects = {}
+
+	local function scan(store)
+		if type(store) ~= "table" then
+			return
+		end
+
+		-- Sorted so a config file diffs cleanly between saves.
+		for _, index in Util.SortedKeys(store) do
+			local element = store[index]
+			if type(element) == "table" and not self.Ignore[index] then
+				local ok, entry = pcall(serialize, index, element)
+				if ok and entry then
+					table.insert(objects, entry)
+				end
+			end
+		end
+	end
+
+	scan(Library and Library.Toggles)
+	scan(Library and Library.Options)
+
+	return objects
+end
+
+--- Returns how many entries were applied. Anything unknown, ignored, or of the
+--- wrong shape is skipped without erroring.
+function SaveManager:Apply(objects)
+	local Library = self.Library
+	if not Library or type(objects) ~= "table" then
+		return 0
+	end
+
+	local applied = 0
+
+	-- Selecting a theme clears custom colours and applies the whole preset, so
+	-- it has to land BEFORE the per-key colour entries. Collect() emits indexes
+	-- alphabetically, which put ThemeManager_ThemeList last and silently threw
+	-- away every custom colour the config had just restored.
+	local themeListIndex = Library.ThemeManager and Library.ThemeManager.ListIndex
+	local ordered, rest = {}, {}
+	for _, entry in objects do
+		if themeListIndex and type(entry) == "table" and entry.idx == themeListIndex then
+			table.insert(ordered, entry)
+		else
+			table.insert(rest, entry)
+		end
+	end
+	table.move(rest, 1, #rest, #ordered + 1, ordered)
+
+	for _, entry in ordered do
+		if type(entry) == "table" and entry.idx ~= nil and not self.Ignore[entry.idx] then
+			local element = Library.Toggles[entry.idx] or Library.Options[entry.idx]
+			if type(element) == "table" and element.Type == entry.type then
+				local ok, result = pcall(deserialize, element, entry)
+				if ok and result then
+					applied += 1
+				end
+			end
+		end
+	end
+
+	return applied
+end
+
+function SaveManager:ConfigList()
+	local list = {}
+
+	for _, path in Util.FS.List(self:SettingsFolder()) do
+		if type(path) == "string" and path:sub(-5) == ".json" then
+			local stem = Util.FS.Stem(path, ".json")
+			if stem ~= "" then
+				table.insert(list, stem)
+			end
+		end
+	end
+
+	table.sort(list)
+	return list
+end
+
+--==============================================================
+-- operations
+--==============================================================
+
+function SaveManager:Save(name)
+	local Library = self.Library
+
+	local clean = self:Sanitize(name)
+	if not clean then
+		notify(Library, "Enter a valid config name", "risk")
+		return false
+	end
+
+	if not Util.FS.Available() then
+		notify(Library, "Filesystem unavailable", "risk")
+		return false
+	end
+
+	self:BuildFolders()
+
+	local written = Util.FS.WriteJSON(self:ConfigPath(clean), {
+		name = clean,
+		version = 1,
+		objects = self:Collect(),
+	})
+
+	if not written then
+		notify(Library, ("Could not write %s"):format(clean), "risk")
+		return false
+	end
+
+	notify(Library, ("Saved %s"):format(clean), "good")
+	self:RefreshConfigList()
+
+	return true
+end
+
+function SaveManager:Load(name)
+	local Library = self.Library
+
+	local clean = self:Sanitize(name)
+	if not clean then
+		notify(Library, "Select a config first", "risk")
+		return false
+	end
+
+	if not Util.FS.Available() then
+		notify(Library, "Filesystem unavailable", "risk")
+		return false
+	end
+
+	local data = Util.FS.ReadJSON(self:ConfigPath(clean))
+	if type(data) ~= "table" or type(data.objects) ~= "table" then
+		notify(Library, ("%s could not be read"):format(clean), "risk")
+		return false
+	end
+
+	local applied = self:Apply(data.objects)
+	notify(Library, ("Loaded %s (%d values)"):format(clean, applied), "good")
+
+	return true
+end
+
+function SaveManager:Delete(name)
+	local Library = self.Library
+
+	local clean = self:Sanitize(name)
+	if not clean then
+		notify(Library, "Select a config first", "risk")
+		return false
+	end
+
+	if not Util.FS.Available() then
+		notify(Library, "Filesystem unavailable", "risk")
+		return false
+	end
+
+	local path = self:ConfigPath(clean)
+	if not Util.FS.IsFile(path) then
+		notify(Library, ("%s does not exist"):format(clean), "risk")
+		return false
+	end
+
+	if not Util.FS.Delete(path) then
+		notify(Library, ("Could not delete %s"):format(clean), "risk")
+		return false
+	end
+
+	if self.AutoloadName == clean then
+		self:ClearAutoload()
+	end
+
+	notify(Library, ("Deleted %s"):format(clean), "good")
+	self:RefreshConfigList()
+
+	return true
+end
+
+function SaveManager:SetAutoload(name)
+	local Library = self.Library
+
+	local clean = self:Sanitize(name)
+	if not clean then
+		notify(Library, "Select a config first", "risk")
+		return false
+	end
+
+	if not Util.FS.Available() then
+		notify(Library, "Filesystem unavailable", "risk")
+		return false
+	end
+
+	if not Util.FS.IsFile(self:ConfigPath(clean)) then
+		notify(Library, ("%s does not exist"):format(clean), "risk")
+		return false
+	end
+
+	self:BuildFolders()
+
+	if not Util.FS.Write(self:AutoloadPath(), clean) then
+		notify(Library, "Could not write autoload", "risk")
+		return false
+	end
+
+	self.AutoloadName = clean
+	self:UpdateAutoloadLabel()
+	notify(Library, ("%s will autoload"):format(clean), "good")
+
+	return true
+end
+
+function SaveManager:ClearAutoload()
+	Util.FS.Delete(self:AutoloadPath())
+	self.AutoloadName = nil
+	self:UpdateAutoloadLabel()
+	return true
+end
+
+--- Reads (and caches) the autoload name without loading it.
+function SaveManager:ReadAutoload()
+	local contents = Util.FS.Read(self:AutoloadPath())
+	self.AutoloadName = self:Sanitize(contents)
+	return self.AutoloadName
+end
+
+function SaveManager:LoadAutoloadConfig()
+	local name = self:ReadAutoload()
+	if not name then
+		return false
+	end
+
+	self:UpdateAutoloadLabel()
+	return self:Load(name)
+end
+
+--==============================================================
+-- ui
+--==============================================================
+
+function SaveManager:UpdateAutoloadLabel()
+	local label = self.Objects.AutoloadLabel
+	if label and label.SetText then
+		label:SetText(("Autoload: %s"):format(self.AutoloadName or "none"))
+	end
+	return self
+end
+
+function SaveManager:RefreshConfigList()
+	local list = self:ConfigList()
+
+	local dropdown = self.Objects.List
+	if dropdown and dropdown.SetValues then
+		dropdown:SetValues(list)
+	end
+
+	return list
+end
+
+--- Whatever the list is pointing at, or nil when nothing is selected.
+function SaveManager:Selected()
+	local dropdown = self.Objects.List
+	local value = dropdown and dropdown.Value
+	if type(value) == "string" and value ~= "" then
+		return value
+	end
+	return nil
+end
+
+function SaveManager:BuildConfigSection(tab)
+	local Library = self.Library
+
+	if not Library then
+		warn("[Sable] SaveManager:BuildConfigSection called before :SetLibrary")
+		return tab
+	end
+
+	local groupbox = tab
+	if type(tab) == "table" and tab.AddRightGroupbox then
+		groupbox = tab:AddRightGroupbox("Configuration")
+	end
+	if type(groupbox) ~= "table" or not groupbox.AddInput then
+		warn("[Sable] SaveManager:BuildConfigSection needs a tab or groupbox")
+		return groupbox
+	end
+
+	self:BuildFolders()
+	self:ReadAutoload()
+
+	local nameInput = groupbox:AddInput(NAME_INDEX, {
+		Text = "Config name",
+		Placeholder = "name",
+		MaxLength = 40,
+		Tooltip = "Used by CREATE",
+	})
+	self.Objects.Name = nameInput
+
+	self.Objects.List = groupbox:AddDropdown(LIST_INDEX, {
+		Text = "Config list",
+		Values = self:ConfigList(),
+		Default = 1,
+		AllowNull = true,
+		Tooltip = "Configs found on disk",
+	})
+
+	--- The typed name wins for CREATE; every other action works on the list
+	--- selection and falls back to the typed name.
+	local function target()
+		return self:Selected() or (nameInput and nameInput.Value)
+	end
+
+	local create = groupbox:AddButton({
+		Text = "Create",
+		Tooltip = "Write the current values to the typed name",
+		Func = function()
+			self:Save(nameInput and nameInput.Value)
+		end,
+	})
+
+	if create and create.AddButton then
+		create:AddButton({
+			Text = "Overwrite",
+			Tooltip = "Write the current values over the selected config",
+			Func = function()
+				self:Save(target())
+			end,
+		})
+	end
+
+	local load = groupbox:AddButton({
+		Text = "Load",
+		Tooltip = "Apply the selected config",
+		Func = function()
+			self:Load(target())
+		end,
+	})
+
+	if load and load.AddButton then
+		load:AddButton({
+			Text = "Delete",
+			DoubleClick = true,
+			Tooltip = "Double click to delete the selected config",
+			Func = function()
+				self:Delete(target())
+			end,
+		})
+	end
+
+	groupbox:AddButton({
+		Text = "Refresh list",
+		Tooltip = "Re-read the settings folder",
+		Func = function()
+			local list = self:RefreshConfigList()
+			notify(Library, ("%d config(s) on disk"):format(#list))
+		end,
+	})
+
+	groupbox:AddButton({
+		Text = "Set as autoload",
+		Tooltip = "Load the selected config on the next run",
+		Func = function()
+			self:SetAutoload(target())
+		end,
+	})
+
+	self.Objects.AutoloadLabel = groupbox:AddLabel("Autoload: none")
+	self:UpdateAutoloadLabel()
+
+	return groupbox
+end
+
+return SaveManager
+end
+
+__modules["addons/ThemeManager"] = function()
+
+-- Sable :: addons/ThemeManager
+--
+-- Colour presets plus a live per-key editor, persisted as hex under
+-- <folder>/themes. Reached as Library.ThemeManager -- the spine calls
+-- :SetLibrary for you; the method survives being called again so Linoria-style
+-- scripts that call it themselves keep working.
+--
+-- Every preset keeps the warm, dark, low-chroma neutrals of the stock scheme.
+-- A theme moves the accent and nudges the greys; it never turns Sable into a
+-- bright or pastel menu.
+
+local Util = require("Util")
+
+local ThemeManager = {}
+
+--- The keys the editor exposes. Everything else in a scheme is derived from
+--- the preset (AccentDim follows Accent inside Library:SetScheme).
+local KEYS = { "Accent", "Background", "Panel", "Outline", "Font" }
+
+--- Presentation order for the dropdown; unknown extras are appended sorted.
+local ORDER = { "Sable", "Ember", "Signal", "Ice", "Void", "Mono" }
+
+ThemeManager.Library = nil :: any
+ThemeManager.Folder = "Sable"
+ThemeManager.Theme = "Sable"
+ThemeManager.CustomKeys = KEYS
+
+--- key -> hex string, only for colours the user overrode on top of the preset.
+ThemeManager.Custom = {}
+--- Elements built by :ApplyToGroupbox, so a later theme change can resync them.
+ThemeManager.Objects = {}
+
+--- True only while :ApplyToGroupbox constructs its controls, so the elements'
+--- initial callbacks cannot stomp a theme that was already loaded from disk.
+ThemeManager.Building = false
+
+ThemeManager.ListIndex = "ThemeManager_ThemeList"
+ThemeManager.PickerIndexes = {
+	Accent = "ThemeManager_AccentColor",
+	Background = "ThemeManager_BackgroundColor",
+	Panel = "ThemeManager_PanelColor",
+	Outline = "ThemeManager_OutlineColor",
+	Font = "ThemeManager_FontColor",
+}
+
+-- Flat list so SaveManager:IgnoreThemeSettings has one thing to read.
+ThemeManager.Indexes = { ThemeManager.ListIndex }
+for _, key in KEYS do
+	table.insert(ThemeManager.Indexes, ThemeManager.PickerIndexes[key])
+end
+
+--==============================================================
+-- presets
+--==============================================================
+
+ThemeManager.BuiltInThemes = {
+	-- Mirrored from Theme.Default in :SetLibrary; kept here in full so the
+	-- table is complete even if the addon is used before the spine runs.
+	Sable = {
+		Background = Color3.fromRGB(18, 17, 15),
+		Panel = Color3.fromRGB(26, 25, 22),
+		PanelRaised = Color3.fromRGB(34, 32, 29),
+		PanelSunken = Color3.fromRGB(13, 12, 11),
+		Outline = Color3.fromRGB(52, 49, 44),
+		OutlineDim = Color3.fromRGB(36, 34, 30),
+		Accent = Color3.fromRGB(233, 161, 59),
+		AccentDim = Color3.fromRGB(126, 88, 34),
+		Font = Color3.fromRGB(218, 213, 204),
+		FontDim = Color3.fromRGB(124, 117, 107),
+		FontFaint = Color3.fromRGB(84, 79, 72),
+		Risk = Color3.fromRGB(226, 78, 63),
+		Good = Color3.fromRGB(126, 176, 106),
+		Black = Color3.fromRGB(0, 0, 0),
+	},
+
+	-- Brick red. Deliberately deeper than Risk so a risky label still reads as
+	-- a warning and not as an active control.
+	Ember = {
+		Background = Color3.fromRGB(20, 16, 15),
+		Panel = Color3.fromRGB(29, 23, 22),
+		PanelRaised = Color3.fromRGB(37, 30, 28),
+		PanelSunken = Color3.fromRGB(14, 11, 11),
+		Outline = Color3.fromRGB(57, 45, 43),
+		OutlineDim = Color3.fromRGB(40, 32, 30),
+		Accent = Color3.fromRGB(198, 64, 44),
+		AccentDim = Color3.fromRGB(106, 34, 23),
+		Font = Color3.fromRGB(219, 209, 205),
+		FontDim = Color3.fromRGB(126, 114, 110),
+		FontFaint = Color3.fromRGB(86, 76, 73),
+		Risk = Color3.fromRGB(232, 96, 82),
+		Good = Color3.fromRGB(126, 176, 106),
+		Black = Color3.fromRGB(0, 0, 0),
+	},
+
+	Signal = {
+		Background = Color3.fromRGB(16, 18, 15),
+		Panel = Color3.fromRGB(23, 26, 22),
+		PanelRaised = Color3.fromRGB(30, 34, 29),
+		PanelSunken = Color3.fromRGB(12, 13, 11),
+		Outline = Color3.fromRGB(46, 53, 44),
+		OutlineDim = Color3.fromRGB(32, 37, 30),
+		Accent = Color3.fromRGB(96, 196, 84),
+		AccentDim = Color3.fromRGB(48, 101, 42),
+		Font = Color3.fromRGB(211, 216, 205),
+		FontDim = Color3.fromRGB(117, 122, 109),
+		FontFaint = Color3.fromRGB(79, 84, 73),
+		Risk = Color3.fromRGB(226, 78, 63),
+		Good = Color3.fromRGB(148, 190, 120),
+		Black = Color3.fromRGB(0, 0, 0),
+	},
+
+	Ice = {
+		Background = Color3.fromRGB(15, 18, 19),
+		Panel = Color3.fromRGB(21, 26, 27),
+		PanelRaised = Color3.fromRGB(28, 34, 35),
+		PanelSunken = Color3.fromRGB(11, 13, 14),
+		Outline = Color3.fromRGB(44, 52, 54),
+		OutlineDim = Color3.fromRGB(30, 36, 38),
+		Accent = Color3.fromRGB(78, 178, 196),
+		AccentDim = Color3.fromRGB(38, 92, 102),
+		Font = Color3.fromRGB(206, 214, 217),
+		FontDim = Color3.fromRGB(110, 119, 123),
+		FontFaint = Color3.fromRGB(74, 81, 84),
+		Risk = Color3.fromRGB(226, 78, 63),
+		Good = Color3.fromRGB(126, 176, 106),
+		Black = Color3.fromRGB(0, 0, 0),
+	},
+
+	Void = {
+		Background = Color3.fromRGB(18, 16, 20),
+		Panel = Color3.fromRGB(26, 24, 30),
+		PanelRaised = Color3.fromRGB(34, 31, 38),
+		PanelSunken = Color3.fromRGB(13, 12, 15),
+		Outline = Color3.fromRGB(52, 48, 58),
+		OutlineDim = Color3.fromRGB(36, 33, 41),
+		Accent = Color3.fromRGB(148, 124, 190),
+		AccentDim = Color3.fromRGB(78, 64, 101),
+		Font = Color3.fromRGB(214, 209, 219),
+		FontDim = Color3.fromRGB(121, 116, 128),
+		FontFaint = Color3.fromRGB(82, 78, 88),
+		Risk = Color3.fromRGB(226, 78, 63),
+		Good = Color3.fromRGB(126, 176, 106),
+		Black = Color3.fromRGB(0, 0, 0),
+	},
+
+	-- No hue at all: "on" is simply brighter than the text around it. Text is
+	-- pulled down a step so the accent still separates from a plain label.
+	Mono = {
+		Background = Color3.fromRGB(18, 17, 15),
+		Panel = Color3.fromRGB(26, 25, 22),
+		PanelRaised = Color3.fromRGB(34, 32, 29),
+		PanelSunken = Color3.fromRGB(13, 12, 11),
+		Outline = Color3.fromRGB(52, 49, 44),
+		OutlineDim = Color3.fromRGB(36, 34, 30),
+		Accent = Color3.fromRGB(231, 227, 219),
+		AccentDim = Color3.fromRGB(122, 118, 111),
+		Font = Color3.fromRGB(199, 194, 186),
+		FontDim = Color3.fromRGB(118, 112, 103),
+		FontFaint = Color3.fromRGB(82, 77, 70),
+		Risk = Color3.fromRGB(226, 78, 63),
+		Good = Color3.fromRGB(126, 176, 106),
+		Black = Color3.fromRGB(0, 0, 0),
+	},
+}
+
+--==============================================================
+-- plumbing
+--==============================================================
+
+local function notify(Library, description, kind)
+	if not Library or not Library.Notify then
+		return
+	end
+	Library:Notify({
+		Title = "Theme",
+		Description = description,
+		Time = 4,
+		Good = kind == "good",
+		Risk = kind == "risk",
+	})
+end
+
+function ThemeManager:SetLibrary(Library)
+	if type(Library) ~= "table" then
+		return self
+	end
+
+	self.Library = Library
+
+	-- Theme.lua owns the stock palette, so mirror it rather than letting the
+	-- copy above drift away from it.
+	if type(Library.ThemeDefaults) == "table" then
+		self.BuiltInThemes.Sable = Util.DeepCopy(Library.ThemeDefaults)
+	end
+
+	return self
+end
+
+function ThemeManager:SetFolder(path)
+	if type(path) == "string" and path ~= "" then
+		self.Folder = path
+	end
+	self:BuildFolders()
+	return self
+end
+
+function ThemeManager:ThemesFolder()
+	return self.Folder .. "/themes"
+end
+
+function ThemeManager:DefaultPath()
+	return self:ThemesFolder() .. "/default.json"
+end
+
+function ThemeManager:BuildFolders()
+	if not Util.FS.Available() then
+		return false
+	end
+	return Util.FS.EnsureFolder(self:ThemesFolder())
+end
+
+function ThemeManager:ThemeNames()
+	local names = {}
+
+	for _, name in ORDER do
+		if self.BuiltInThemes[name] then
+			table.insert(names, name)
+		end
+	end
+
+	for _, name in Util.SortedKeys(self.BuiltInThemes) do
+		if not table.find(names, name) then
+			table.insert(names, name)
+		end
+	end
+
+	return names
+end
+
+--==============================================================
+-- applying
+--==============================================================
+
+--- Pushes the live scheme back into the editor controls without re-firing
+--- their callbacks.
+function ThemeManager:Sync()
+	local Library = self.Library
+	if not Library then
+		return self
+	end
+
+	local list = self.Objects.List
+	if list and list.SetValue and list.Value ~= self.Theme then
+		list:SetValue(self.Theme, true)
+	end
+
+	for _, key in KEYS do
+		local picker = self.Objects[key]
+		local color = Library.Scheme[key]
+		if picker and picker.SetValue and color and picker.Value ~= color then
+			picker:SetValue(color, true)
+		end
+	end
+
+	return self
+end
+
+function ThemeManager:ApplyTheme(name)
+	local Library = self.Library
+	local theme = type(name) == "string" and self.BuiltInThemes[name] or nil
+
+	if not Library or not theme then
+		return false
+	end
+
+	self.Theme = name
+	-- A preset is a whole scheme, so per-key overrides are done with.
+	table.clear(self.Custom)
+
+	Library:SetScheme(theme)
+	self:Sync()
+
+	return true
+end
+
+--- One key of the live scheme, remembered as an override so :SetDefault can
+--- write it back out.
+function ThemeManager:SetColor(key, color)
+	local Library = self.Library
+	if not Library or typeof(color) ~= "Color3" then
+		return false
+	end
+	if Library.Scheme[key] == nil then
+		return false
+	end
+
+	self.Custom[key] = Util.ToHex(color)
+	Library:SetScheme(key, color)
+
+	return true
+end
+
+--- Back to stock: the Sable preset, no overrides, no stored default.
+function ThemeManager:Reset()
+	self:ApplyTheme("Sable")
+	Util.FS.Delete(self:DefaultPath())
+	return true
+end
+
+function ThemeManager:SetDefault(name)
+	name = type(name) == "string" and name or self.Theme
+
+	if not self.BuiltInThemes[name] then
+		return false
+	end
+
+	if name ~= self.Theme then
+		self:ApplyTheme(name)
+	end
+
+	if not Util.FS.Available() then
+		return false
+	end
+
+	self:BuildFolders()
+
+	local ok = Util.FS.WriteJSON(self:DefaultPath(), {
+		Theme = name,
+		Custom = Util.DeepCopy(self.Custom),
+	})
+
+	return ok and true or false
+end
+
+function ThemeManager:LoadDefault()
+	local data = Util.FS.ReadJSON(self:DefaultPath())
+
+	local name = data and data.Theme
+	if type(name) ~= "string" or not self.BuiltInThemes[name] then
+		name = "Sable"
+	end
+
+	self:ApplyTheme(name)
+
+	if data and type(data.Custom) == "table" then
+		for key, hex in data.Custom do
+			local color = Util.FromHex(hex)
+			if color then
+				self:SetColor(key, color)
+			end
+		end
+	end
+
+	self:Sync()
+
+	return self.Theme
+end
+
+--==============================================================
+-- ui
+--==============================================================
+
+function ThemeManager:ApplyToGroupbox(groupbox)
+	local Library = self.Library
+
+	if not Library then
+		warn("[Sable] ThemeManager:ApplyToGroupbox called before :SetLibrary")
+		return groupbox
+	end
+	if type(groupbox) ~= "table" or not groupbox.AddDropdown then
+		warn("[Sable] ThemeManager:ApplyToGroupbox needs a groupbox")
+		return groupbox
+	end
+
+	local names = self:ThemeNames()
+
+	self.Building = true
+
+	self.Objects.List = groupbox:AddDropdown(self.ListIndex, {
+		Text = "Theme",
+		Values = names,
+		Default = table.find(names, self.Theme) or 1,
+		Tooltip = "Built-in colour schemes",
+		Callback = function(value)
+			if self.Building then
+				return
+			end
+			self:ApplyTheme(value)
+		end,
+	})
+
+	for _, key in KEYS do
+		self.Objects[key] = groupbox:AddColorPicker(self.PickerIndexes[key], {
+			Text = key,
+			Title = key,
+			Default = Library.Scheme[key],
+			Tooltip = ("Overrides the %s colour of the selected theme"):format(key:lower()),
+			Callback = function(color)
+				if self.Building then
+					return
+				end
+				self:SetColor(key, color)
+			end,
+		})
+	end
+
+	local setDefault = groupbox:AddButton({
+		Text = "Set as default",
+		Tooltip = "Apply this theme automatically on load",
+		Func = function()
+			if self:SetDefault(self.Theme) then
+				notify(Library, ("%s saved as default"):format(self.Theme), "good")
+			else
+				notify(Library, "Filesystem unavailable", "risk")
+			end
+		end,
+	})
+
+	if setDefault and setDefault.AddButton then
+		setDefault:AddButton({
+			Text = "Reset",
+			Tooltip = "Back to the stock Sable scheme",
+			Func = function()
+				self:Reset()
+				notify(Library, "Reset to Sable", "good")
+			end,
+		})
+	end
+
+	self.Building = false
+
+	-- The controls were built from whatever the scheme already was; make sure
+	-- they agree with it now that callbacks are live again.
+	self:Sync()
+
+	return groupbox
+end
+
+function ThemeManager:ApplyToTab(tab)
+	if type(tab) == "table" and tab.AddLeftGroupbox then
+		return self:ApplyToGroupbox(tab:AddLeftGroupbox("Theme"))
+	end
+	return self:ApplyToGroupbox(tab)
+end
+
+return ThemeManager
+end
+
+__modules["elements/Base"] = function()
+
+-- Sable :: elements/Base
+--
+-- Shared behaviour for every control. Element modules call Base.Create to get
+-- an object with change notification, visibility, disabled state and tooltip
+-- handling already wired, then attach their own visuals and :SetValue.
+--
+-- CONTRACT for element authors -- after Base.Create you MUST set:
+--   element.Row    the row Frame you created with Library:Row(container, h)
+--   element.Value  the current value
+-- and you SHOULD set:
+--   element.Label  the TextLabel showing element.Text, if the control has one
+--   element.Hit    the TextButton used for hit testing, if the control has one
+-- and you MUST implement on the element (not on Base):
+--   element:SetValue(value, silent)  apply + repaint + Fire unless silent
+--   element:Display()                repaint visuals from element.Value
+
+local Base = {}
+
+local Methods = {}
+Methods.__index = Methods
+Base.Methods = Methods
+
+--- kind is the element type name ("Toggle", "Slider", ...). `index` is the key
+--- it will be registered under in Library.Toggles / Library.Options.
+function Base.Create(Library, container, kind, index, options)
+	options = options or {}
+
+	local element = setmetatable({}, Methods)
+
+	element.Library = Library
+	element.Parent = container
+	element.Type = kind
+	element.Index = index
+	element.Opts = options
+	element.Callbacks = {}
+
+	element.Text = options.Text or (type(index) == "string" and index) or ""
+	element.Tooltip = options.Tooltip
+	element.DisabledTooltip = options.DisabledTooltip
+	element.Disabled = options.Disabled == true
+	element.Visible = options.Visible ~= false
+	element.Risky = options.Risky == true
+
+	table.insert(container.Elements, element)
+
+	return element
+end
+
+--- Call once at the end of an element's constructor: registers it in the right
+--- store and applies tooltip / disabled / visible state.
+---
+--- It deliberately does NOT fire the callback: constructing a menu would
+--- otherwise run every callback in the script during layout. Callers that want
+--- the initial value delivered should use `:OnChanged(fn, true)`.
+function Base.Finish(element, store)
+	local Library = element.Library
+
+	if element.Index ~= nil and store then
+		store[element.Index] = element
+		element.Store = store
+	end
+
+	if element.Tooltip or element.DisabledTooltip then
+		local target = element.Hit or element.Row
+		if target then
+			element.UpdateTooltip = Library:GiveTooltip(target, element.Tooltip, element.DisabledTooltip)
+		end
+	end
+
+	if element.Disabled then
+		element:SetDisabled(true)
+	end
+
+	if not element.Visible then
+		element:SetVisible(false)
+	end
+
+	return element
+end
+
+--==============================================================
+-- change notification
+--==============================================================
+
+--- Subscribe to value changes. Pass callNow = true to also run immediately
+--- with the current value.
+function Methods:OnChanged(callback, callNow)
+	table.insert(self.Callbacks, callback)
+	if callNow then
+		self.Library:SafeCallback(callback, self.Value, self)
+	end
+	return self
+end
+
+--- Runs the option Callback first, then every OnChanged subscriber.
+function Methods:Fire()
+	local Library = self.Library
+
+	if self.Opts.Callback then
+		Library:SafeCallback(self.Opts.Callback, self.Value, self)
+	end
+
+	for _, callback in self.Callbacks do
+		Library:SafeCallback(callback, self.Value, self)
+	end
+end
+
+--==============================================================
+-- state
+--==============================================================
+
+function Methods:SetVisible(visible)
+	visible = visible ~= false
+	self.Visible = visible
+
+	-- UIListLayout already skips invisible children, so toggling Visible is
+	-- enough -- the groupbox's AbsoluteContentSize follows on its own. Do not
+	-- also zero the row's size; that loses the size with nothing restoring it.
+	if self.Row then
+		self.Row.Visible = visible
+	end
+
+	if self.Parent and self.Parent.Resize then
+		self.Parent:Resize()
+	end
+
+	return self
+end
+
+function Methods:SetDisabled(disabled)
+	disabled = disabled == true
+	self.Disabled = disabled
+
+	if self.Row then
+		self.Row:SetAttribute("SableDisabled", disabled)
+	end
+	if self.Hit then
+		self.Hit:SetAttribute("SableDisabled", disabled)
+		self.Hit.Active = not disabled
+		self.Hit.Interactable = not disabled
+	end
+
+	-- Retheme, not AddToRegistry: adding would stack a second entry for the
+	-- same instance every time disabled state flipped.
+	--
+	-- The element's own rule is captured once and restored on re-enable.
+	-- Elements like Toggle register a FUNCTION source that derives the label
+	-- colour from live state; overwriting it with a flat key here left OFF
+	-- toggles repainting as ON after any theme change.
+	if self.Label then
+		if self.LabelColourSource == nil then
+			self.LabelColourSource = self.Library:GetRegistrySource(self.Label, "TextColor3")
+				or (self.Risky and "Risk" or "Font")
+		end
+
+		self.Library:Retheme(self.Label, {
+			TextColor3 = disabled and "FontFaint" or self.LabelColourSource,
+		})
+	end
+
+	if self.OnDisabledChanged then
+		self.Library:SafeCallback(self.OnDisabledChanged, disabled, self)
+	end
+
+	return self
+end
+
+function Methods:SetText(text)
+	self.Text = text or ""
+	if self.Label then
+		self.Label.Text = self.Library:FormatLabel(self.Text)
+	end
+	return self
+end
+
+function Methods:SetTooltip(text, disabledText)
+	self.Tooltip = text
+	self.DisabledTooltip = disabledText
+	if self.UpdateTooltip then
+		self.UpdateTooltip(text, disabledText)
+	end
+	return self
+end
+
+--==============================================================
+-- teardown
+--==============================================================
+
+function Methods:Destroy()
+	-- Library signals are plain Lua signals, not RBXScriptConnections, so
+	-- destroying instances does NOT silence handlers that closed over this
+	-- element. Any handler an element registers on Library.InputBegan and
+	-- friends MUST bail on this flag, or a destroyed bind keeps firing the
+	-- user's callback.
+	self.Destroyed = true
+
+	-- Inline pickers live inside THIS element's row but are registered as
+	-- independent elements. Destroying only ourselves would take their visuals
+	-- away while leaving their store entry, input handlers and keybind-list row
+	-- alive forever -- a dead bind that still fires the user's callback.
+	if self.Row and self.Parent and self.Parent.Elements then
+		for _, other in table.clone(self.Parent.Elements) do
+			if other ~= self and other.Row and other.Row ~= self.Row then
+				local ok, isDescendant = pcall(function()
+					return other.Row:IsDescendantOf(self.Row)
+				end)
+				if ok and isDescendant then
+					other:Destroy()
+				end
+			end
+		end
+	end
+
+	if self.Store and self.Index ~= nil and self.Store[self.Index] == self then
+		self.Store[self.Index] = nil
+	end
+
+	if self.Parent and self.Parent.Elements then
+		local index = table.find(self.Parent.Elements, self)
+		if index then
+			table.remove(self.Parent.Elements, index)
+		end
+	end
+
+	if self.Row then
+		self.Library:RemoveFromRegistry(self.Row)
+		pcall(function()
+			self.Row:Destroy()
+		end)
+	end
+
+	table.clear(self.Callbacks)
+
+	if self.Parent and self.Parent.Resize then
+		self.Parent:Resize()
+	end
+end
+
+return Base
+end
+
+__modules["elements/Button"] = function()
+
+-- Sable :: elements/Button
+--
+-- A command row. :AddButton splits the SAME row into equal columns, so
+-- SAVE | LOAD | DELETE reads as one bank of keys instead of three stacked
+-- rows. Only the first button is a Base element; the columns added after it
+-- are lighter objects sharing that element's row, which keeps the container's
+-- element list (and therefore its layout) honest about how many rows exist.
+
+local Base = require("elements/Base")
+
+local Button = {}
+
+--- How long a DoubleClick button waits for its confirming second press.
+local CONFIRM_WINDOW = 0.5
+--- How long the accent press-flash stays lit before easing back.
+local FLASH_HOLD = 0.1
+--- Uppercased by FormatLabel at paint time, like every other element label.
+local CONFIRM_TEXT = "...Are you sure?"
+
+local Segment = {}
+Segment.__index = Segment
+
+--==============================================================
+-- construction helpers
+--==============================================================
+
+--- Accepts either a plain string or the full option table.
+local function normalize(info)
+	if type(info) ~= "table" then
+		return { Text = info ~= nil and tostring(info) or "Button" }
+	end
+
+	return {
+		Text = info.Text ~= nil and tostring(info.Text) or "Button",
+		Func = info.Func or info.Callback,
+		DoubleClick = info.DoubleClick == true,
+		Tooltip = info.Tooltip,
+		DisabledTooltip = info.DisabledTooltip,
+		Disabled = info.Disabled == true,
+	}
+end
+
+--- Re-flows every column in the shared row. Columns are always equal width, so
+--- adding one moves and resizes the siblings that were already there.
+local function relayout(group)
+	local items = group.Items
+	local count = #items
+	local gap = group.Gap
+
+	for index, segment in items do
+		segment.Frame.Size = UDim2.new(1 / count, -gap * (count - 1) / count, 1, 0)
+		segment.Frame.Position = UDim2.new((index - 1) / count, (index - 1) * gap / count, 0, 0)
+	end
+end
+
+--- Momentary accent on the caption. The press has no lasting state to show, so
+--- the flash is the entire acknowledgement.
+local function flash(segment)
+	local Library = segment.Library
+	local label = segment.Label
+
+	label.TextColor3 = Library:GetColor("Accent")
+
+	task.delay(FLASH_HOLD, function()
+		if Library.Unloaded or not label.Parent then
+			return
+		end
+		Library:Tween(label, {
+			TextColor3 = Library:GetColor(segment.Disabled and "FontFaint" or "Font"),
+		}, Library.Motion.Slow)
+	end)
+end
+
+local function press(segment)
+	local Library = segment.Library
+	if Library.Unloaded or segment.Disabled then
+		return
+	end
+
+	if segment.DoubleClick and not segment.Confirming then
+		segment.Confirming = true
+		-- The token invalidates a pending revert, so a confirmed press cannot
+		-- be un-confirmed by the timer it started with.
+		segment.ConfirmToken += 1
+		local token = segment.ConfirmToken
+		segment:Display()
+
+		task.delay(CONFIRM_WINDOW, function()
+			if Library.Unloaded or segment.ConfirmToken ~= token then
+				return
+			end
+			segment.Confirming = false
+			segment:Display()
+		end)
+
+		return
+	end
+
+	segment.ConfirmToken += 1
+	segment.Confirming = false
+	segment:Display()
+
+	flash(segment)
+	Library:SafeCallback(segment.Func)
+end
+
+--- Builds one column into the shared row and wires its behaviour. `segment` is
+--- either a Base element (the first button) or a bare Segment (every :AddButton
+--- after it) -- both carry the same fields from here on.
+local function build(Library, group, segment, options)
+	segment.Library = Library
+	segment.Group = group
+	segment.Row = group.Row
+	segment.Opts = options
+	segment.Text = options.Text
+	segment.Func = options.Func
+	segment.DoubleClick = options.DoubleClick
+	segment.Disabled = options.Disabled == true
+	segment.Confirming = false
+	segment.ConfirmToken = 0
+
+	local frame = Library:Panel({
+		Name = "Button",
+		Size = UDim2.fromScale(1, 1),
+		Parent = group.Row,
+	}, "Panel", "Outline")
+
+	local label = Library:Label({
+		Name = "Text",
+		Size = UDim2.fromScale(1, 1),
+		Text = Library:FormatLabel(options.Text),
+		TextXAlignment = Enum.TextXAlignment.Center,
+		-- Columns get narrow fast; a clipped caption beats an overflowing one.
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = frame,
+	}, "Font")
+
+	local hit = Library:HitButton(frame)
+
+	segment.Frame = frame
+	segment.Label = label
+	segment.Hit = hit
+
+	Library:BindHover(hit, frame, "Panel", "PanelRaised")
+
+	Library:GiveSignal(hit.MouseButton1Click:Connect(function()
+		press(segment)
+	end))
+
+	table.insert(group.Items, segment)
+	relayout(group)
+
+	return segment
+end
+
+--==============================================================
+-- shared column behaviour
+--==============================================================
+
+function Segment:Display()
+	local text = self.Confirming and CONFIRM_TEXT or self.Text
+	self.Label.Text = self.Library:FormatLabel(text)
+	return self
+end
+
+function Segment:SetText(text)
+	self.Text = text ~= nil and tostring(text) or ""
+	self:Display()
+	return self
+end
+
+function Segment:SetDisabled(disabled)
+	disabled = disabled == true
+	self.Disabled = disabled
+
+	self.Hit:SetAttribute("SableDisabled", disabled)
+	self.Hit.Active = not disabled
+	self.Hit.Interactable = not disabled
+
+	self.Library:AddToRegistry(self.Label, {
+		TextColor3 = disabled and "FontFaint" or "Font",
+	})
+
+	return self
+end
+
+function Segment:SetTooltip(text, disabledText)
+	self.Tooltip = text
+	self.DisabledTooltip = disabledText
+	if self.UpdateTooltip then
+		self.UpdateTooltip(text, disabledText)
+	end
+	return self
+end
+
+--- Splits this button's row into one more equal column.
+function Segment:AddButton(info)
+	local Library = self.Library
+	local options = normalize(info)
+
+	local segment = build(Library, self.Group, setmetatable({}, Segment), options)
+
+	if options.Tooltip or options.DisabledTooltip then
+		segment.UpdateTooltip = Library:GiveTooltip(segment.Hit, options.Tooltip, options.DisabledTooltip)
+	end
+
+	if segment.Disabled then
+		segment:SetDisabled(true)
+	end
+
+	return segment
+end
+
+--- Removes this column and re-flows the rest. Destroying the *first* button
+--- goes through Base instead and takes the whole row -- every column with it.
+function Segment:Destroy()
+	local items = self.Group.Items
+	local index = table.find(items, self)
+	if index then
+		table.remove(items, index)
+	end
+
+	self.Library:RemoveFromRegistry(self.Frame)
+	self.Library:RemoveFromRegistry(self.Label)
+
+	pcall(function()
+		self.Frame:Destroy()
+	end)
+
+	if #items > 0 then
+		relayout(self.Group)
+	end
+end
+
+--==============================================================
+-- constructor
+--==============================================================
+
+function Button.New(Library, container, info)
+	local options = normalize(info)
+
+	local element = Base.Create(Library, container, "Button", nil, options)
+
+	local row = Library:Row(container, Library.Sizes.RowHeight)
+	row.Name = "ButtonRow"
+
+	element.Row = row
+	element.ExpandedSize = row.Size
+	element.Value = false
+
+	local group = {
+		Row = row,
+		Items = {},
+		Gap = Library.Sizes.RowGap * 2,
+	}
+	element.Group = group
+
+	-- The first button shares the columns' behaviour but keeps Base's state
+	-- handling (SetDisabled/SetVisible/Destroy operate on the row it owns).
+	element.Display = Segment.Display
+	element.SetText = Segment.SetText
+	element.AddButton = Segment.AddButton
+
+	--- A button carries no state; present only for the element contract, and
+	--- deliberately inert so a config load can never fire a command.
+	function element:SetValue(_value, _silent)
+		return self
+	end
+
+	build(Library, group, element, options)
+
+	return Base.Finish(element, nil)
+end
+
+return Button
+end
+
+__modules["elements/ColorPicker"] = function()
+
+-- Sable :: elements/ColorPicker
+--
+-- A swatch that opens an HSV popup: saturation/value square, vertical hue bar,
+-- an optional alpha bar, and a hex field. Hue/sat/val are stored separately
+-- from the resulting Color3 -- deriving the colour from HSV on every change is
+-- what lets you drag value down to black and back without the hue collapsing
+-- to red on the way.
+--
+-- Two entry points share one builder: New() gives the swatch its own row,
+-- Attach() puts it in a host element's Right slot at LayoutOrder 10 + n, which
+-- lands it to the left of the host's own control.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local ColorPicker = {}
+
+--==============================================================
+-- geometry
+--==============================================================
+
+local PAD = 8
+local GAP = 6
+local SV_SIZE = 132
+local BAR_WIDTH = 12
+local ALPHA_HEIGHT = 10
+local FIELD_HEIGHT = 18
+local COPY_WIDTH = 44
+local TITLE_HEIGHT = 12
+local CURSOR_SIZE = 7
+
+local CONTENT_WIDTH = SV_SIZE + GAP + BAR_WIDTH
+local POPUP_WIDTH = CONTENT_WIDTH + PAD * 2
+
+-- Pure white and pure black are not theming here, they are the arithmetic of
+-- the HSV square: saturation fades toward white, value fades toward black. A
+-- themed "white" would make the picker report a colour it is not showing. Same
+-- exemption the swatch fill gets -- these ARE the value, not a surface.
+local WHITE = Color3.new(1, 1, 1)
+local BLACK = Color3.new(0, 0, 0)
+
+local hueStops = table.create(7)
+for step = 0, 6 do
+	local alpha = step / 6
+	table.insert(hueStops, ColorSequenceKeypoint.new(alpha, Color3.fromHSV(alpha, 1, 1)))
+end
+local HUE_SEQUENCE = ColorSequence.new(hueStops)
+
+-- Opaque at offset 0, gone at offset 1. Rotation decides which edge that is.
+local FADE_OUT = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 0),
+	NumberSequenceKeypoint.new(1, 1),
+})
+
+local FADE_IN = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 1),
+	NumberSequenceKeypoint.new(1, 0),
+})
+
+--==============================================================
+-- helpers
+--==============================================================
+
+--- Next free slot in a host's addon band. Counted off the live children rather
+--- than a shared counter so ColorPicker and KeyPicker interleave correctly no
+--- matter which order the script author attaches them in.
+local function nextAddonOrder(right)
+	local used = 0
+	for _, child in right:GetChildren() do
+		-- The host's own control sits at 100; addons occupy 10..99.
+		if child:IsA("GuiObject") and child.LayoutOrder >= 10 and child.LayoutOrder < 100 then
+			used += 1
+		end
+	end
+	return 10 + used
+end
+
+--- Accepts everything a caller or a saved config might hand us: a Color3, a
+--- hex string, or the { hex, transparency } pair SaveManager serialises.
+local function decode(value)
+	if typeof(value) == "Color3" then
+		return value, nil
+	end
+
+	if type(value) == "string" then
+		return Util.FromHex(value), nil
+	end
+
+	if type(value) == "table" then
+		local raw = value.Hex or value.hex or value.Color or value[1]
+		local color = typeof(raw) == "Color3" and raw or Util.FromHex(raw)
+
+		local transparency = value.Transparency or value.transparency or value[2]
+		return color, type(transparency) == "number" and transparency or nil
+	end
+
+	return nil, nil
+end
+
+--==============================================================
+-- builder
+--==============================================================
+
+--- `host` is nil for a standalone row, or the element whose Right slot the
+--- swatch should live in. Everything past the swatch is identical either way.
+local function build(Library, container, host, index, options)
+	options = options or {}
+
+	local element = Base.Create(Library, container, "ColorPicker", index, options)
+
+	local sizes = Library.Sizes
+	local control = sizes.Control
+
+	local default = typeof(options.Default) == "Color3" and options.Default or Library:GetColor("Accent")
+	local hue, saturation, value = default:ToHSV()
+
+	element.Hue = hue
+	element.Sat = saturation
+	element.Val = value
+	element.Value = Color3.fromHSV(hue, saturation, value)
+	element.Transparency = type(options.Transparency) == "number" and Util.Clamp(options.Transparency, 0, 1)
+		or nil
+	element.Title = options.Title or (type(index) == "string" and index) or element.Text
+
+	local hasAlpha = element.Transparency ~= nil
+
+	--==========================================================
+	-- swatch
+	--==========================================================
+
+	local row
+	if host then
+		-- Hosts put a row-wide hit button at the default ZIndex 5; lifting the
+		-- addon slot above it is what lets a click reach the swatch instead of
+		-- toggling the host underneath.
+		if host.Right.ZIndex < 6 then
+			host.Right.ZIndex = 6
+		end
+
+		-- The holder is exactly swatch-sized so the host's list layout reserves
+		-- the right amount of room, and so SetVisible can collapse just us.
+		row = Library:Create("Frame", {
+			Name = "ColorPicker",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.fromOffset(control, control),
+			LayoutOrder = nextAddonOrder(host.Right),
+			ZIndex = 6,
+			Parent = host.Right,
+		})
+	else
+		row = Library:Row(container)
+
+		element.Label = Library:Label({
+			Name = "Label",
+			Text = Library:FormatLabel(element.Text),
+			Size = UDim2.new(1, -(control + GAP), 1, 0),
+			Parent = row,
+		}, element.Risky and "Risk" or "Font")
+	end
+
+	element.Row = row
+	element.ExpandedSize = row.Size
+
+	-- The one legitimate raw Color3 in an element: this is the value itself,
+	-- not a themed surface, so it must NOT go into the colour registry.
+	local swatch = Library:Create("Frame", {
+		Name = "Swatch",
+		BorderSizePixel = 0,
+		BackgroundColor3 = element.Value,
+		BackgroundTransparency = element.Transparency or 0,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(control, control),
+		Parent = row,
+	})
+	Library:AddToRegistry(Util.Stroke(swatch, Library:GetColor("Outline"), sizes.Outline), { Color = "Outline" })
+
+	local hit = Library:HitButton(swatch, { Name = "SwatchHit" })
+
+	element.Swatch = swatch
+	element.Hit = hit
+
+	--==========================================================
+	-- popup
+	--==========================================================
+
+	local popupFrame, popupHandle
+	local svBase, svCursor, hueBar, hueMarker
+	local alphaBase, alphaFill, alphaMarker, hexBox
+	local dragging = nil
+
+	local function popupHeight()
+		local height = PAD + TITLE_HEIGHT + GAP + SV_SIZE + GAP + FIELD_HEIGHT + PAD
+		if hasAlpha then
+			height += ALPHA_HEIGHT + GAP
+		end
+		return height
+	end
+
+	--- Fraction of the way across (or down) a frame the cursor currently is.
+	local function ratio(frame, horizontal)
+		local origin = frame.AbsolutePosition
+		local size = frame.AbsoluteSize
+		local mouse = Util.MousePosition()
+
+		if horizontal then
+			if size.X <= 0 then
+				return 0
+			end
+			return Util.Clamp((mouse.X - origin.X) / size.X, 0, 1)
+		end
+
+		if size.Y <= 0 then
+			return 0
+		end
+		return Util.Clamp((mouse.Y - origin.Y) / size.Y, 0, 1)
+	end
+
+	local function commit(silent)
+		element.Value = Color3.fromHSV(element.Hue, element.Sat, element.Val)
+		element:Display()
+		if not silent then
+			element:Fire()
+		end
+	end
+
+	local function updateDrag()
+		if dragging == "SV" then
+			element.Sat = ratio(svBase, true)
+			element.Val = 1 - ratio(svBase, false)
+		elseif dragging == "Hue" then
+			element.Hue = ratio(hueBar, false)
+		elseif dragging == "Alpha" then
+			element.Transparency = ratio(alphaBase, true)
+		else
+			return
+		end
+
+		commit(false)
+	end
+
+	--- Press anywhere in a track starts a drag AND jumps to that point, which
+	--- is what makes the control feel direct rather than handle-based.
+	local function bindTrack(button, mode)
+		Library:GiveSignal(button.InputBegan:Connect(function(input)
+			if
+				input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch
+			then
+				return
+			end
+			dragging = mode
+			updateDrag()
+		end))
+	end
+
+	local function buildPopup()
+		if popupFrame then
+			return popupFrame
+		end
+
+		local frame = Library:Panel({
+			Name = "ColorPopup",
+			Visible = false,
+			Size = UDim2.fromOffset(POPUP_WIDTH, popupHeight()),
+			Parent = Library.PopupHolder,
+		}, "Panel", "Outline")
+		popupFrame = frame
+
+		Library:CornerTicks(frame, "Accent")
+
+		Library:Label({
+			Name = "Title",
+			Text = Library:Chrome(element.Title),
+			TextSize = sizes.TextSmall,
+			Position = UDim2.fromOffset(PAD, PAD),
+			Size = UDim2.new(1, -PAD * 2, 0, TITLE_HEIGHT),
+			Parent = frame,
+		}, "FontDim")
+
+		local cursorY = PAD + TITLE_HEIGHT + GAP
+
+		--------------------------------------------------------
+		-- saturation / value square
+		--------------------------------------------------------
+
+		svBase = Library:Create("Frame", {
+			Name = "SV",
+			BorderSizePixel = 0,
+			BackgroundColor3 = Color3.fromHSV(element.Hue, 1, 1),
+			Position = UDim2.fromOffset(PAD, cursorY),
+			Size = UDim2.fromOffset(SV_SIZE, SV_SIZE),
+			Parent = frame,
+		})
+		Library:AddToRegistry(
+			Util.Stroke(svBase, Library:GetColor("Outline"), sizes.Outline),
+			{ Color = "Outline" }
+		)
+
+		local satFade = Library:Create("Frame", {
+			Name = "Saturation",
+			BorderSizePixel = 0,
+			BackgroundColor3 = WHITE,
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 2,
+			Parent = svBase,
+		})
+		Util.Create("UIGradient", {
+			Name = "Fade",
+			Transparency = FADE_OUT,
+			Parent = satFade,
+		})
+
+		local valFade = Library:Create("Frame", {
+			Name = "Value",
+			BorderSizePixel = 0,
+			BackgroundColor3 = BLACK,
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 3,
+			Parent = svBase,
+		})
+		Util.Create("UIGradient", {
+			Name = "Fade",
+			Rotation = 90,
+			Transparency = FADE_IN,
+			Parent = valFade,
+		})
+
+		-- Two nested hairline rings: the dark one reads on pale colours, the
+		-- light one on dark colours, so the marker never disappears.
+		svCursor = Library:Create("Frame", {
+			Name = "Cursor",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Size = UDim2.fromOffset(CURSOR_SIZE, CURSOR_SIZE),
+			ZIndex = 4,
+			Parent = svBase,
+		})
+		Library:AddToRegistry(Util.Stroke(svCursor, Library:GetColor("Black"), 1), { Color = "Black" })
+
+		local cursorInner = Library:Create("Frame", {
+			Name = "Inner",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.new(1, -2, 1, -2),
+			ZIndex = 4,
+			Parent = svCursor,
+		})
+		Library:AddToRegistry(Util.Stroke(cursorInner, Library:GetColor("Font"), 1), { Color = "Font" })
+
+		bindTrack(Library:HitButton(svBase, { Name = "SVHit" }), "SV")
+
+		--------------------------------------------------------
+		-- hue bar
+		--------------------------------------------------------
+
+		hueBar = Library:Create("Frame", {
+			Name = "Hue",
+			BorderSizePixel = 0,
+			-- A UIGradient multiplies the fill, so the base has to be white for
+			-- the spectrum keypoints to come through unshifted.
+			BackgroundColor3 = WHITE,
+			Position = UDim2.fromOffset(PAD + SV_SIZE + GAP, cursorY),
+			Size = UDim2.fromOffset(BAR_WIDTH, SV_SIZE),
+			Parent = frame,
+		})
+		Util.Create("UIGradient", {
+			Name = "Spectrum",
+			Rotation = 90,
+			Color = HUE_SEQUENCE,
+			Parent = hueBar,
+		})
+		Library:AddToRegistry(
+			Util.Stroke(hueBar, Library:GetColor("Outline"), sizes.Outline),
+			{ Color = "Outline" }
+		)
+
+		hueMarker = Library:Create("Frame", {
+			Name = "Marker",
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0),
+			Size = UDim2.new(1, 2, 0, 2),
+			ZIndex = 2,
+			Theme = { BackgroundColor3 = "Font" },
+			Parent = hueBar,
+		})
+		Library:AddToRegistry(Util.Stroke(hueMarker, Library:GetColor("Black"), 1), { Color = "Black" })
+
+		bindTrack(Library:HitButton(hueBar, { Name = "HueHit" }), "Hue")
+
+		cursorY += SV_SIZE + GAP
+
+		--------------------------------------------------------
+		-- alpha bar
+		--------------------------------------------------------
+
+		if hasAlpha then
+			alphaBase = Library:Panel({
+				Name = "Alpha",
+				Position = UDim2.fromOffset(PAD, cursorY),
+				Size = UDim2.fromOffset(CONTENT_WIDTH, ALPHA_HEIGHT),
+				Parent = frame,
+			}, "PanelSunken", "Outline")
+
+			alphaFill = Library:Create("Frame", {
+				Name = "Fill",
+				BorderSizePixel = 0,
+				BackgroundColor3 = element.Value,
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 2,
+				Parent = alphaBase,
+			})
+			Util.Create("UIGradient", {
+				Name = "Fade",
+				Transparency = FADE_OUT,
+				Parent = alphaFill,
+			})
+
+			alphaMarker = Library:Create("Frame", {
+				Name = "Marker",
+				BorderSizePixel = 0,
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0, 0.5),
+				Size = UDim2.new(0, 2, 1, 2),
+				ZIndex = 3,
+				Theme = { BackgroundColor3 = "Font" },
+				Parent = alphaBase,
+			})
+			Library:AddToRegistry(Util.Stroke(alphaMarker, Library:GetColor("Black"), 1), { Color = "Black" })
+
+			bindTrack(Library:HitButton(alphaBase, { Name = "AlphaHit" }), "Alpha")
+
+			cursorY += ALPHA_HEIGHT + GAP
+		end
+
+		--------------------------------------------------------
+		-- hex field + copy
+		--------------------------------------------------------
+
+		local fieldWidth = CONTENT_WIDTH - COPY_WIDTH - GAP
+
+		local field = Library:Panel({
+			Name = "Hex",
+			Position = UDim2.fromOffset(PAD, cursorY),
+			Size = UDim2.fromOffset(fieldWidth, FIELD_HEIGHT),
+			Parent = frame,
+		}, "PanelSunken", "Outline")
+
+		hexBox = Library:Create("TextBox", {
+			Name = "Field",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Font = Library.Fonts.Value,
+			TextSize = sizes.TextSmall,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			Text = Util.ToHex(element.Value),
+			PlaceholderText = "RRGGBB",
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 2,
+			Theme = { TextColor3 = "Font", PlaceholderColor3 = "FontFaint" },
+			Parent = field,
+		})
+
+		Library:GiveSignal(hexBox.FocusLost:Connect(function()
+			local parsed = Util.FromHex(hexBox.Text)
+			if parsed then
+				element:SetValue(parsed)
+			else
+				-- Invalid input never mutates the value; repaint puts the last
+				-- good hex back in the box.
+				element:Display()
+			end
+		end))
+
+		local copy = Library:Panel({
+			Name = "Copy",
+			Position = UDim2.fromOffset(PAD + fieldWidth + GAP, cursorY),
+			Size = UDim2.fromOffset(COPY_WIDTH, FIELD_HEIGHT),
+			Parent = frame,
+		}, "Panel", "Outline")
+
+		Library:Label({
+			Name = "Text",
+			Text = Library:FormatLabel("Copy"),
+			TextSize = sizes.TextSmall,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 2,
+			Parent = copy,
+		}, "FontDim")
+
+		local copyHit = Library:HitButton(copy, { Name = "CopyHit" })
+		Library:BindHover(copyHit, copy, "Panel", "PanelRaised")
+
+		Library:GiveSignal(copyHit.MouseButton1Click:Connect(function()
+			Util.SetClipboard(Util.ToHex(element.Value))
+		end))
+
+		return frame
+	end
+
+	--==========================================================
+	-- api
+	--==========================================================
+
+	function element:Display()
+		swatch.BackgroundColor3 = self.Value
+		swatch.BackgroundTransparency = self.Transparency or 0
+
+		if not popupFrame then
+			return self
+		end
+
+		svBase.BackgroundColor3 = Color3.fromHSV(self.Hue, 1, 1)
+		svCursor.Position = UDim2.fromScale(self.Sat, 1 - self.Val)
+		hueMarker.Position = UDim2.fromScale(0.5, self.Hue)
+
+		if alphaFill then
+			alphaFill.BackgroundColor3 = self.Value
+			alphaMarker.Position = UDim2.fromScale(self.Transparency or 0, 0.5)
+		end
+
+		-- Never fight the user mid-edit.
+		if not hexBox:IsFocused() then
+			hexBox.Text = Util.ToHex(self.Value)
+		end
+
+		return self
+	end
+
+	function element:SetValue(newValue, silent)
+		local color, transparency = decode(newValue)
+
+		if color then
+			local newHue, newSat, newVal = color:ToHSV()
+			-- Greys and blacks report hue 0; keeping the stored hue means a
+			-- round trip through black does not silently turn the picker red.
+			if newSat > 0 and newVal > 0 then
+				self.Hue = newHue
+			end
+			self.Sat = newSat
+			self.Val = newVal
+		end
+
+		if transparency ~= nil and self.Transparency ~= nil then
+			self.Transparency = Util.Clamp(transparency, 0, 1)
+		end
+
+		commit(silent)
+		return self
+	end
+
+	--- Linoria compatibility: same thing, always audible.
+	function element:SetValueRGB(color, transparency)
+		if transparency ~= nil and self.Transparency ~= nil then
+			self.Transparency = Util.Clamp(tonumber(transparency) or 0, 0, 1)
+		end
+		return self:SetValue(color, false)
+	end
+
+	function element:SetTransparency(newTransparency, silent)
+		if self.Transparency == nil then
+			return self
+		end
+		self.Transparency = Util.Clamp(tonumber(newTransparency) or 0, 0, 1)
+		commit(silent)
+		return self
+	end
+
+	function element:Open()
+		if self.Disabled then
+			return self
+		end
+
+		local frame = buildPopup()
+		self:Display()
+
+		popupHandle = Library:OpenPopup(frame, swatch, {
+			Width = POPUP_WIDTH,
+			Height = popupHeight(),
+			Gap = 4,
+			OnClose = function()
+				dragging = nil
+			end,
+		})
+
+		return self
+	end
+
+	function element:Close()
+		if popupHandle then
+			Library:ClosePopup(popupHandle)
+		end
+		return self
+	end
+
+	function element:Destroy()
+		self:Close()
+
+		if popupFrame then
+			pcall(function()
+				popupFrame:Destroy()
+			end)
+			popupFrame = nil
+		end
+
+		return Base.Methods.Destroy(self)
+	end
+
+	--==========================================================
+	-- wiring
+	--==========================================================
+
+	Library:GiveSignal(hit.MouseButton1Click:Connect(function()
+		if element.Disabled then
+			return
+		end
+
+		local active = Library.ActivePopup
+		if active and popupFrame and active.Frame == popupFrame then
+			element:Close()
+			return
+		end
+
+		element:Open()
+	end))
+
+	-- Tracked on the shared signals rather than the track itself so the drag
+	-- survives the cursor leaving the popup entirely.
+	Library:GiveSignal(Library.InputChanged:Connect(function(input)
+		if Library.Unloaded or not dragging then
+			return
+		end
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+		updateDrag()
+	end))
+
+	Library:GiveSignal(Library.InputEnded:Connect(function(input)
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			dragging = nil
+		end
+	end))
+
+	element:Display()
+
+	return Base.Finish(element, Library.Options)
+end
+
+--==============================================================
+-- constructors
+--==============================================================
+
+function ColorPicker.New(Library, container, index, options)
+	return build(Library, container, nil, index, options)
+end
+
+--- Inline picker: registered in Library.Options exactly like a standalone one,
+--- but parented into the host's addon slot and owned by the host's container
+--- so Destroy/Resize bookkeeping still lands in the right place.
+function ColorPicker.Attach(Library, host, index, options)
+	assert(host.Right, "[Sable] host element has no Right slot for a ColorPicker")
+	assert(host.Parent, "[Sable] host element has no container")
+
+	local element = build(Library, host.Parent, host, index, options)
+	element.Host = host
+
+	return element
+end
+
+return ColorPicker
+end
+
+__modules["elements/Divider"] = function()
+
+-- Sable :: elements/Divider
+--
+-- A hairline rule between groups of controls. Deliberately dimmer than a
+-- groupbox outline (OutlineDim) so it separates without framing anything.
+
+local Base = require("elements/Base")
+
+local Divider = {}
+
+function Divider.New(Library, container)
+	local element = Base.Create(Library, container, "Divider", nil, {})
+
+	-- One pixel of rule with a row gap of air on either side.
+	local row = Library:Row(container, Library.Sizes.RowGap * 2 + Library.Sizes.Outline)
+	row.Name = "DividerRow"
+
+	element.Row = row
+	element.ExpandedSize = row.Size
+	element.Value = false
+
+	element.Line = Library:Create("Frame", {
+		Name = "Line",
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 0, Library.Sizes.Outline),
+		Theme = { BackgroundColor3 = "OutlineDim" },
+		Parent = row,
+	})
+
+	-- A divider is pure chrome: no value, nothing to repaint. Both members
+	-- exist only because the element contract requires them.
+	function element:Display()
+		return self
+	end
+
+	function element:SetValue(_value, _silent)
+		return self
+	end
+
+	return Base.Finish(element, nil)
+end
+
+return Divider
+end
+
+__modules["elements/Dropdown"] = function()
+
+-- Sable :: elements/Dropdown
+--
+-- Label on the left, a hairline-outlined value button on the right. The list
+-- itself lives in the shared popup layer: Library:OpenPopup owns positioning,
+-- outside-click dismissal and the "only one popup at a time" rule, so this
+-- module never touches PopupHolder directly beyond parenting its frame.
+--
+-- Row instances are pooled rather than rebuilt, because :SetValues is commonly
+-- called on a timer (player lists) and every rebuild would otherwise leak a
+-- hover connection pair per row for the lifetime of the menu.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local Dropdown = {}
+
+local SEARCH_HEIGHT = 20
+local MIN_POPUP_WIDTH = 132
+local PLACEHOLDER = "NONE"
+
+-- Plain text, never an image asset -- the library is text and rectangles only.
+local CARET_CLOSED = "\u{25BC}"
+local CARET_OPEN = "\u{25B2}"
+
+--- Swaps the scheme key an instance is themed with, so live theme switching
+--- keeps working after a state change. Only safe on instances that register
+--- exactly ONE property, since RemoveFromRegistry drops every entry they own.
+local function repaint(Library, instance, property, key)
+	local attribute = "SableKey" .. property
+	if instance:GetAttribute(attribute) == key then
+		return
+	end
+
+	instance:SetAttribute(attribute, key)
+	Library:RemoveFromRegistry(instance)
+	Library:AddToRegistry(instance, { [property] = key })
+end
+
+local function toStringList(values)
+	local list = {}
+	if type(values) == "table" then
+		for index = 1, #values do
+			local value = values[index]
+			if value ~= nil then
+				table.insert(list, tostring(value))
+			end
+		end
+	end
+	return list
+end
+
+function Dropdown.New(Library, container, index, options)
+	options = options or {}
+
+	local element = Base.Create(Library, container, "Dropdown", index, options)
+
+	element.Values = toStringList(options.Values)
+	element.Multi = options.Multi == true
+	element.AllowNull = options.AllowNull == true
+	element.Searchable = options.Searchable == true
+	element.MaxVisible = math.max(
+		1,
+		math.floor(tonumber(options.MaxVisibleDropdownItems) or Library.Sizes.PopupMaxItems)
+	)
+
+	element.Rows = {}
+	element.Opened = false
+	element.Value = element.Multi and {} or nil
+
+	--==============================================================
+	-- row
+	--==============================================================
+
+	local row = Library:Row(container)
+	element.Row = row
+	element.ExpandedSize = row.Size
+
+	element.Label = Library:Label({
+		Name = "Label",
+		Size = UDim2.new(0.5, -6, 1, 0),
+		Text = Library:FormatLabel(element.Text),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = row,
+	}, element.Risky and "Risk" or "Font")
+
+	local button, stroke = Library:Panel({
+		Name = "Value",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(0.5, 0, 1, -2),
+		ClipsDescendants = true,
+		Parent = row,
+	}, "Panel", "Outline")
+
+	element.Button = button
+	element.Stroke = stroke
+
+	element.Caret = Library:Label({
+		Name = "Caret",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -4, 0.5, 0),
+		Size = UDim2.new(0, 10, 1, 0),
+		TextSize = Library.Sizes.TextSmall,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Text = CARET_CLOSED,
+		Parent = button,
+	}, "FontDim")
+
+	element.ValueLabel = Library:Label({
+		Name = "Text",
+		Position = UDim2.fromOffset(6, 0),
+		Size = UDim2.new(1, -22, 1, 0),
+		TextSize = Library.Sizes.TextSmall,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Text = PLACEHOLDER,
+		Parent = button,
+	}, "FontDim")
+
+	element.Hit = Library:HitButton(button)
+	Library:BindHover(element.Hit, button, "Panel", "PanelRaised")
+
+	--==============================================================
+	-- popup
+	--==============================================================
+
+	local popup = Library:Panel({
+		Name = "DropdownPopup",
+		Visible = false,
+		ClipsDescendants = true,
+		Size = UDim2.fromOffset(MIN_POPUP_WIDTH, Library.Sizes.RowHeight),
+		Parent = Library.PopupHolder,
+	}, "Panel", "Outline")
+
+	element.Popup = popup
+	Library:CornerTicks(popup, "Accent")
+
+	local listOffset = 0
+	if element.Searchable then
+		local search = Library:Panel({
+			Name = "Search",
+			Size = UDim2.new(1, 0, 0, SEARCH_HEIGHT),
+			ClipsDescendants = true,
+			Parent = popup,
+		}, "PanelSunken", false)
+
+		Library:Create("Frame", {
+			Name = "Rule",
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 0, 1, 0),
+			Size = UDim2.new(1, 0, 0, Library.Sizes.Outline),
+			BorderSizePixel = 0,
+			Theme = { BackgroundColor3 = "OutlineDim" },
+			Parent = search,
+		})
+
+		element.Search = Library:Create("TextBox", {
+			Name = "Field",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Position = UDim2.fromOffset(6, 0),
+			Size = UDim2.new(1, -12, 1, 0),
+			Font = Library.Fonts.Label,
+			TextSize = Library.Sizes.TextSmall,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			Text = "",
+			PlaceholderText = Library:FormatLabel("Filter"),
+			ClearTextOnFocus = false,
+			ClipsDescendants = true,
+			Theme = { TextColor3 = "Font", PlaceholderColor3 = "FontDim" },
+			Parent = search,
+		})
+
+		listOffset = SEARCH_HEIGHT
+	end
+
+	element.List = Library:Create("ScrollingFrame", {
+		Name = "List",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(0, listOffset),
+		Size = UDim2.new(1, 0, 1, -listOffset),
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ScrollBarThickness = Library.Sizes.ScrollBar,
+		-- Empty image: the stock scrollbar texture has rounded caps.
+		ScrollBarImage = "",
+		ScrollBarImageTransparency = 0,
+		VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
+		Theme = { ScrollBarImageColor3 = "Outline" },
+		Parent = popup,
+	})
+
+	Util.ListLayout(element.List, 0)
+
+	local function makeRow(position)
+		local frame = Library:Create("TextButton", {
+			Name = "Item",
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			Text = "",
+			Size = UDim2.new(1, 0, 0, Library.Sizes.RowHeight),
+			LayoutOrder = position,
+			Visible = false,
+			ClipsDescendants = true,
+			Theme = { BackgroundColor3 = "Panel" },
+			Parent = element.List,
+		})
+
+		local bar = Library:Create("Frame", {
+			Name = "Mark",
+			BorderSizePixel = 0,
+			Visible = false,
+			Size = UDim2.new(0, Library.Sizes.Indicator, 1, 0),
+			Theme = { BackgroundColor3 = "Accent" },
+			Parent = frame,
+		})
+
+		local label = Library:Label({
+			Name = "Text",
+			Position = UDim2.fromOffset(8, 0),
+			Size = UDim2.new(1, -12, 1, 0),
+			TextSize = Library.Sizes.TextSmall,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Parent = frame,
+		}, "FontDim")
+
+		local item = {
+			Frame = frame,
+			Bar = bar,
+			Label = label,
+			Value = nil,
+			Enabled = false,
+		}
+
+		Library:BindHover(frame, frame, "Panel", "PanelRaised")
+
+		Library:GiveSignal(frame.MouseButton1Click:Connect(function()
+			if not item.Enabled or item.Value == nil then
+				return
+			end
+			element:Choose(item.Value)
+		end))
+
+		return item
+	end
+
+	--==============================================================
+	-- value handling
+	--==============================================================
+
+	--- Accepts a string, a set, a list, a number index or nil and returns the
+	--- canonical shape for this dropdown's mode.
+	function element:Normalise(value)
+		local values = self.Values
+
+		if self.Multi then
+			local set = {}
+
+			if type(value) == "table" then
+				for key, item in value do
+					if type(key) == "string" and item then
+						if table.find(values, key) then
+							set[key] = true
+						end
+					elseif type(item) == "string" and table.find(values, item) then
+						set[item] = true
+					end
+				end
+			elseif type(value) == "number" then
+				local name = values[value]
+				if name then
+					set[name] = true
+				end
+			elseif type(value) == "string" and table.find(values, value) then
+				set[value] = true
+			end
+
+			-- No re-seeding here. AllowNull governs SINGLE-select nullability;
+			-- an empty multi-selection is a legitimate state. Re-seeding made
+			-- the last item impossible to uncheck -- clicking it off put it
+			-- straight back -- and silently corrupted an empty saved config.
+			return set
+		end
+
+		local resolved = nil
+
+		if type(value) == "number" then
+			resolved = values[value]
+		elseif type(value) == "string" then
+			if table.find(values, value) then
+				resolved = value
+			end
+		elseif type(value) == "table" then
+			-- A config saved while this index was Multi, or a plain list.
+			for key, item in value do
+				if type(key) == "string" and item and table.find(values, key) then
+					resolved = key
+					break
+				end
+				if type(item) == "string" and table.find(values, item) then
+					resolved = item
+					break
+				end
+			end
+		end
+
+		if resolved == nil and not self.AllowNull then
+			resolved = values[1]
+		end
+
+		return resolved
+	end
+
+	--- How many characters fit inside the value button at its current width.
+	function element:Capacity()
+		local width = self.ValueLabel.AbsoluteSize.X
+		if width <= 0 then
+			return 18
+		end
+
+		local advance = Util.TextSize("0", self.Library.Sizes.TextSmall, self.Library.Fonts.Value).X
+		if advance <= 0 then
+			advance = self.Library.Sizes.TextSmall * 0.6
+		end
+
+		return math.max(3, math.floor(width / advance))
+	end
+
+	function element:Display()
+		local text = PLACEHOLDER
+		local selected = false
+
+		if self.Multi then
+			local names = {}
+			for position = 1, #self.Values do
+				local name = self.Values[position]
+				if self.Value[name] then
+					table.insert(names, name)
+				end
+			end
+			if #names > 0 then
+				text = table.concat(names, ", ")
+				selected = true
+			end
+		elseif self.Value ~= nil then
+			text = self.Value
+			selected = true
+		end
+
+		self.ValueLabel.Text = Util.Truncate(text, self:Capacity())
+		repaint(self.Library, self.ValueLabel, "TextColor3", selected and "Font" or "FontDim")
+
+		for position = 1, #self.Rows do
+			local item = self.Rows[position]
+			if item.Enabled and item.Value ~= nil then
+				local on
+				if self.Multi then
+					on = self.Value[item.Value] == true
+				else
+					on = self.Value == item.Value
+				end
+
+				item.Bar.Visible = on
+				repaint(self.Library, item.Label, "TextColor3", on and "Accent" or "FontDim")
+			end
+		end
+
+		return self
+	end
+
+	function element:SetValue(value, silent)
+		self.Value = self:Normalise(value)
+		self:Display()
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	--- Applies a row click. Multi toggles and stays open; single selects (or
+	--- clears, when AllowNull) and closes.
+	function element:Choose(name)
+		if self.Multi then
+			local set = {}
+			for key in self.Value do
+				set[key] = true
+			end
+
+			if set[name] then
+				set[name] = nil
+			else
+				set[name] = true
+			end
+
+			self:SetValue(set)
+			return self
+		end
+
+		if self.Value == name and self.AllowNull then
+			self:SetValue(nil)
+		else
+			self:SetValue(name)
+		end
+
+		self:Close()
+		return self
+	end
+
+	--==============================================================
+	-- list
+	--==============================================================
+
+	function element:Filter(query)
+		query = tostring(query or ""):lower()
+
+		for position = 1, #self.Rows do
+			local item = self.Rows[position]
+			local visible = item.Enabled
+
+			if visible and query ~= "" and item.Value ~= nil then
+				visible = string.find(item.Value:lower(), query, 1, true) ~= nil
+			end
+
+			item.Frame.Visible = visible
+		end
+
+		return self
+	end
+
+	function element:Rebuild()
+		local values = self.Values
+
+		for position = 1, #values do
+			local item = self.Rows[position]
+			if not item then
+				item = makeRow(position)
+				self.Rows[position] = item
+			end
+
+			item.Value = values[position]
+			item.Enabled = true
+			item.Label.Text = values[position]
+		end
+
+		for position = #values + 1, #self.Rows do
+			local item = self.Rows[position]
+			item.Value = nil
+			item.Enabled = false
+			item.Bar.Visible = false
+		end
+
+		self:Filter(self.Search and self.Search.Text or "")
+		return self
+	end
+
+	function element:SetValues(list)
+		self.Values = toStringList(list)
+		self:Rebuild()
+
+		-- Normalise drops anything that no longer exists, and re-seeds the
+		-- first entry when this dropdown may not be empty.
+		self.Value = self:Normalise(self.Value)
+		self:Display()
+
+		return self
+	end
+
+	--==============================================================
+	-- open / close
+	--==============================================================
+
+	function element:SetOpened(opened)
+		self.Opened = opened == true
+
+		repaint(self.Library, self.Stroke, "Color", self.Opened and "Accent" or "Outline")
+		repaint(self.Library, self.Caret, "TextColor3", self.Opened and "Accent" or "FontDim")
+		self.Caret.Text = self.Opened and CARET_OPEN or CARET_CLOSED
+
+		return self
+	end
+
+	function element:Close()
+		local active = self.Library.ActivePopup
+		if active and active.Frame == self.Popup then
+			self.Library:ClosePopup(active)
+		end
+		return self
+	end
+
+	function element:Open()
+		local Library = self.Library
+		if Library.Unloaded or self.Disabled then
+			return self
+		end
+
+		local active = Library.ActivePopup
+		if active and active.Frame == self.Popup then
+			Library:ClosePopup(active)
+			return self
+		end
+
+		if self.Search then
+			self.Search.Text = ""
+		end
+		self:Filter("")
+		self.List.CanvasPosition = Vector2.zero
+
+		local shown = math.max(1, math.min(#self.Values, self.MaxVisible))
+		local height = shown * Library.Sizes.RowHeight + (self.Search and SEARCH_HEIGHT or 0)
+
+		Library:OpenPopup(self.Popup, self.Button, {
+			Height = height,
+			Width = math.max(self.Button.AbsoluteSize.X, MIN_POPUP_WIDTH),
+			Gap = 2,
+			OnClose = function()
+				self:SetOpened(false)
+			end,
+		})
+
+		self:SetOpened(true)
+		return self
+	end
+
+	--==============================================================
+	-- wiring
+	--==============================================================
+
+	Library:GiveSignal(element.Hit.MouseButton1Click:Connect(function()
+		element:Open()
+	end))
+
+	if element.Search then
+		Library:GiveSignal(element.Search:GetPropertyChangedSignal("Text"):Connect(function()
+			element:Filter(element.Search.Text)
+		end))
+	end
+
+	-- The button width is layout-driven, so the truncation budget is only known
+	-- once it has been measured -- and again whenever the window is resized.
+	Library:GiveSignal(element.ValueLabel:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if Library.Unloaded then
+			return
+		end
+		element:Display()
+	end))
+
+	element.OnDisabledChanged = function(disabled)
+		if disabled then
+			element:Close()
+		end
+	end
+
+	local baseDestroy = Base.Methods.Destroy
+	function element:Destroy()
+		self:Close()
+		pcall(function()
+			self.Popup:Destroy()
+		end)
+		return baseDestroy(self)
+	end
+
+	element:Rebuild()
+	element:SetValue(options.Default, true)
+
+	return Base.Finish(element, Library.Options)
+end
+
+return Dropdown
+end
+
+__modules["elements/Input"] = function()
+
+-- Sable :: elements/Input
+--
+-- Single-line text field. Label left, sunken field right; the field's hairline
+-- goes Accent while focused so the box you are typing into reads at a glance.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local Input = {}
+
+-- Share of the row the field occupies when there is a label to sit beside.
+local FIELD_SCALE = 0.5
+local LABEL_GAP = 6
+
+--- Accepts a leading '-' and at most one '.', so half-typed numbers ("-", ".",
+--- "-1.") stay editable while anything non-numeric is rejected outright.
+local function isNumericText(text)
+	local body = text
+	if body:sub(1, 1) == "-" then
+		body = body:sub(2)
+	end
+	return body:match("^%d*%.?%d*$") ~= nil
+end
+
+--- Character-wise truncation. Byte truncation would be enough for ASCII but
+--- can split a multi-byte codepoint and hand Roblox invalid UTF-8.
+local function limit(text, maxLength)
+	if not maxLength then
+		return text
+	end
+
+	local length = utf8.len(text)
+	if not length then
+		return text:sub(1, maxLength)
+	end
+	if length <= maxLength then
+		return text
+	end
+
+	local offset = utf8.offset(text, maxLength + 1)
+	return text:sub(1, (offset or (maxLength + 1)) - 1)
+end
+
+function Input.New(Library, container, index, options)
+	options = options or {}
+
+	local element = Base.Create(Library, container, "Input", index, options)
+
+	local numeric = options.Numeric == true
+	local finished = options.Finished == true
+	local maxLength = nil
+	if type(options.MaxLength) == "number" then
+		maxLength = math.max(0, math.floor(options.MaxLength))
+	end
+
+	--- Everything that reaches element.Value passes through here, so a script
+	--- calling :SetValue can never install text the user could not have typed.
+	local function coerce(value)
+		local text = value == nil and "" or tostring(value)
+		if numeric and not isNumericText(text) then
+			text = text:match("^%-?%d*%.?%d*") or ""
+		end
+		return limit(text, maxLength)
+	end
+
+	local initial = coerce(options.Default)
+
+	local row = Library:Row(container)
+	element.Row = row
+	element.ExpandedSize = row.Size
+
+	local hasLabel = element.Text ~= ""
+
+	if hasLabel then
+		element.Label = Library:Label({
+			Name = "Label",
+			Size = UDim2.new(1 - FIELD_SCALE, -LABEL_GAP, 1, 0),
+			Text = Library:FormatLabel(element.Text),
+			TextSize = Library.Sizes.Text,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Parent = row,
+		}, element.Risky and "Risk" or "Font")
+	end
+
+	local field = Library:Panel({
+		Name = "Field",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = hasLabel and UDim2.new(FIELD_SCALE, 0, 1, -2) or UDim2.new(1, 0, 1, -2),
+		ClipsDescendants = true,
+		Parent = row,
+	}, "PanelSunken", false)
+
+	local focused = false
+
+	local stroke = Util.Stroke(field, Library:GetColor("Outline"), Library.Sizes.Outline)
+	-- Registered as a resolver rather than a flat key: a live theme switch while
+	-- the field is focused must repaint to the new Accent, not to Outline.
+	Library:AddToRegistry(stroke, {
+		Color = function(scheme)
+			return focused and scheme.Accent or scheme.Outline
+		end,
+	})
+
+	local box = Library:Create("TextBox", {
+		Name = "Box",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1),
+		Font = Library.Fonts.Value,
+		TextSize = Library.Sizes.TextSmall,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		ClearTextOnFocus = options.ClearTextOnFocus ~= false,
+		Text = initial,
+		PlaceholderText = tostring(options.Placeholder or ""),
+		Theme = { TextColor3 = "Font", PlaceholderColor3 = "FontFaint" },
+		Parent = field,
+	})
+
+	Util.Padding(box, 0, 4, 0, 4)
+
+	element.Value = initial
+	element.Field = field
+	element.Box = box
+	element.Hit = box
+
+	local lastValid = initial
+	-- Guard for programmatic writes. Property-changed signals can be delivered
+	-- deferred, so a boolean flipped around the write would already be back to
+	-- false by the time the handler runs -- remembering the exact text we wrote
+	-- is the guard that actually holds.
+	local pending = nil
+
+	local function assign(text)
+		if box.Text == text then
+			return
+		end
+		pending = text
+		box.Text = text
+	end
+
+	local function paintOutline()
+		if Library.Unloaded then
+			return
+		end
+		Library:Tween(stroke, {
+			Color = Library:GetColor(focused and "Accent" or "Outline"),
+		}, Library.Motion.Fast)
+	end
+
+	Library:GiveSignal(box:GetPropertyChangedSignal("Text"):Connect(function()
+		local text = box.Text
+
+		if pending ~= nil then
+			local expected = pending
+			pending = nil
+			if text == expected then
+				return
+			end
+		end
+
+		if numeric and not isNumericText(text) then
+			assign(lastValid)
+			return
+		end
+
+		local capped = limit(text, maxLength)
+		if capped ~= text then
+			assign(capped)
+			text = capped
+		end
+
+		lastValid = text
+
+		-- Also covers any stale event left over from a programmatic write: if
+		-- the text already matches the stored value there is nothing to report.
+		if text == element.Value then
+			return
+		end
+
+		element.Value = text
+
+		if not finished then
+			element:Fire()
+		end
+	end))
+
+	Library:GiveSignal(box.Focused:Connect(function()
+		focused = true
+		paintOutline()
+	end))
+
+	-- A Finished input commits on Enter *or* on losing focus, and both land
+	-- here, so the enterPressed flag is not needed to tell them apart.
+	Library:GiveSignal(box.FocusLost:Connect(function()
+		focused = false
+		paintOutline()
+
+		if finished and not element.Disabled then
+			element:Fire()
+		end
+	end))
+
+	element.OnDisabledChanged = function(disabled)
+		box.TextEditable = not disabled
+		if disabled and focused then
+			box:ReleaseFocus()
+		end
+
+		-- Replace rather than stack: later registry entries are applied before
+		-- earlier ones, so an orphaned entry would win the next theme update.
+		Library:RemoveFromRegistry(box)
+		Library:AddToRegistry(box, {
+			TextColor3 = disabled and "FontFaint" or "Font",
+			PlaceholderColor3 = "FontFaint",
+		})
+	end
+
+	function element:Display()
+		assign(self.Value)
+	end
+
+	function element:SetValue(value, silent)
+		local text = coerce(value)
+
+		lastValid = text
+		self.Value = text
+		self:Display()
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	return Base.Finish(element, Library.Options)
+end
+
+return Input
+end
+
+__modules["elements/KeyPicker"] = function()
+
+-- Sable :: elements/KeyPicker
+--
+-- A bind capture pill, in two shapes: a standalone row, and an inline addon
+-- that rides in a Toggle's / Label's Right slot. State is driven off the
+-- library input signals rather than a polling loop, so a Hold bind releases on
+-- exactly the frame the key does.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local UserInputService = game:GetService("UserInputService")
+
+local KeyPicker = {}
+
+local MODES = { "Toggle", "Hold", "Always" }
+local MODE_SET = { Toggle = true, Hold = true, Always = true }
+
+-- Only one pill may be capturing at a time, library-wide: a second click has to
+-- cancel the first, or two pickers would swallow the same keystroke.
+local ActiveCapture = nil
+
+-- Feeds the stable per-picker id used by the keybind overlay.
+local PickerCount = 0
+
+-- A mouse bind resolves on the button *press* that also produces the pill's
+-- Click event, so without a short debounce the pill re-enters capture instantly.
+local CLICK_DEBOUNCE = 0.2
+
+--==============================================================
+-- helpers
+--==============================================================
+
+--- Bind names are stored the way Util.InputName produces them (uppercase), so
+--- a hand-written Default of "e" still matches a real E press.
+local function normalizeKey(key)
+	if type(key) ~= "string" or key == "" then
+		return "None"
+	end
+
+	local upper = key:upper()
+	if upper == "NONE" then
+		return "None"
+	end
+
+	return upper
+end
+
+local function normalizeMode(mode)
+	if type(mode) ~= "string" or mode == "" then
+		return nil
+	end
+
+	local canonical = mode:sub(1, 1):upper() .. mode:sub(2):lower()
+	if MODE_SET[canonical] then
+		return canonical
+	end
+
+	return nil
+end
+
+--- Swaps a themed colour without leaving a stale registry entry behind. The
+--- registry re-applies oldest-entry-last, so simply adding a second entry for
+--- the same property would lose to the original on the next theme change.
+local function recolor(Library, instance, property, key)
+	Library:RemoveFromRegistry(instance)
+	Library:AddToRegistry(instance, { [property] = key })
+end
+
+--- Inline addons occupy LayoutOrder 10..99 in an element's Right slot, left of
+--- the element's own control at 100. Counting what is already there keeps the
+--- order stable no matter which addon type was attached first.
+local function nextAddonOrder(right)
+	local used = 0
+
+	for _, child in right:GetChildren() do
+		local gui = child :: any
+		if child:IsA("GuiObject") and gui.LayoutOrder >= 10 and gui.LayoutOrder < 100 then
+			used += 1
+		end
+	end
+
+	return 10 + used
+end
+
+--- The pill itself: hairline panel, monospace bind name, auto width.
+local function buildPill(Library, parent, standalone, layoutOrder)
+	local pill, stroke = Library:Panel({
+		Name = "Bind",
+		AnchorPoint = standalone and Vector2.new(1, 0.5) or Vector2.new(0, 0),
+		Position = standalone and UDim2.new(1, 0, 0.5, 0) or UDim2.new(0, 0, 0, 0),
+		Size = UDim2.new(0, 0, 0, Library.Sizes.Control + 1),
+		AutomaticSize = Enum.AutomaticSize.X,
+		LayoutOrder = layoutOrder or 1,
+		Parent = parent,
+	}, "Panel", "Outline")
+
+	Util.Padding(pill, 0, 5, 0, 5)
+
+	local value = Library:Label({
+		Name = "Value",
+		Size = UDim2.new(0, 0, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Font = Library.Fonts.Value,
+		TextSize = Library.Sizes.TextSmall,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Text = "NONE",
+		Parent = pill,
+	}, "FontDim")
+
+	local hit = Library:HitButton(pill, { Name = "Hit" })
+
+	return pill, stroke, value, hit
+end
+
+--==============================================================
+-- behaviour
+--==============================================================
+
+--- Everything both constructors share. `host` is the element this picker is
+--- attached to, or nil for a standalone row.
+local function install(Library, element, options, host, pill, stroke, value, hit)
+	PickerCount += 1
+
+	local overlayId = ("Sable.KeyPicker.%d.%s"):format(PickerCount, tostring(element.Index))
+	local clickCallbacks = {}
+	local lastCaptureEnd = 0
+
+	-- SyncToggleState is only meaningful on a host that owns a boolean.
+	local sync = host ~= nil and options.SyncToggleState == true and host.Type == "Toggle"
+	local syncing = false
+
+	local popupFrame = nil
+	local popupHandle = nil
+	local popupRows = nil
+	local refreshPopup = nil
+
+	element.Value = normalizeKey(options.Default)
+	element.Mode = normalizeMode(options.Mode) or "Toggle"
+	element.State = false
+	element.Capturing = false
+	element.NoUI = options.NoUI == true
+
+	--==========================================================
+	-- paint
+	--==========================================================
+
+	--- The overlay is installed by Overlays, which may not have run when this
+	--- module was required -- so it is resolved on every call, never cached.
+	local function overlay()
+		if element.NoUI then
+			return
+		end
+
+		local list = Library.KeybindList
+		if not list then
+			return
+		end
+
+		list:Set(overlayId, {
+			Text = element.Text,
+			Key = element.Value,
+			Mode = element.Mode,
+			Active = element:GetState(),
+		})
+	end
+
+	function element:GetState()
+		if self.Mode == "Always" then
+			return true
+		end
+		if self.Mode == "Hold" then
+			return Util.IsHeld(self.Value)
+		end
+		return self.State == true
+	end
+
+	function element:Display()
+		local capturing = self.Capturing
+
+		value.Text = capturing and "..." or Library:FormatLabel(self.Value)
+
+		local textKey
+		if self.Disabled then
+			textKey = "FontFaint"
+		elseif capturing then
+			textKey = "Accent"
+		elseif self:GetState() then
+			textKey = "Font"
+		else
+			textKey = "FontDim"
+		end
+
+		recolor(Library, value, "TextColor3", textKey)
+		recolor(Library, stroke, "Color", capturing and "Accent" or (self.Disabled and "OutlineDim" or "Outline"))
+
+		if refreshPopup then
+			refreshPopup()
+		end
+	end
+
+	-- Base repaints the row label on its own; the pill needs the same nudge.
+	element.OnDisabledChanged = function()
+		element:Display()
+	end
+
+	--==========================================================
+	-- state
+	--==========================================================
+
+	local function fireState()
+		Library:SafeCallback(options.Callback, element.State, element)
+
+		for _, callback in clickCallbacks do
+			Library:SafeCallback(callback, element.State, element)
+		end
+	end
+
+	local function setState(state, silent)
+		state = state == true
+		if element.State == state then
+			return
+		end
+
+		element.State = state
+		element:Display()
+		overlay()
+
+		if sync and not syncing then
+			syncing = true
+			host:SetValue(state)
+			syncing = false
+		end
+
+		if not silent then
+			fireState()
+		end
+	end
+
+	--- Hold and Always are derived states -- recompute them whenever the bind
+	--- or the mode moves. Toggle keeps whatever the user last set.
+	local function reconcileState(silent)
+		if element.Mode == "Always" then
+			setState(true, silent)
+		elseif element.Mode == "Hold" then
+			setState(Util.IsHeld(element.Value), silent)
+		end
+	end
+
+	--==========================================================
+	-- capture
+	--==========================================================
+
+	local function endCapture()
+		if not element.Capturing then
+			return
+		end
+
+		element.Capturing = false
+		lastCaptureEnd = os.clock()
+
+		if ActiveCapture == element then
+			ActiveCapture = nil
+			-- Deferred: handlers further down the same InputBegan dispatch must
+			-- still see the flag, or the keystroke just bound here would also
+			-- fire whatever else listens for it.
+			task.defer(function()
+				if not ActiveCapture then
+					Library.CapturingInput = false
+				end
+			end)
+		end
+
+		element:Display()
+	end
+
+	element.CancelCapture = endCapture
+
+	local function beginCapture()
+		if element.Disabled or element.Capturing then
+			return
+		end
+		if os.clock() - lastCaptureEnd < CLICK_DEBOUNCE then
+			return
+		end
+
+		if ActiveCapture then
+			ActiveCapture.CancelCapture()
+		end
+
+		Library:ClosePopup()
+
+		element.Capturing = true
+		ActiveCapture = element
+		Library.CapturingInput = true
+
+		element:Display()
+	end
+
+	--==========================================================
+	-- mode popup
+	--==========================================================
+
+	local rowHeight = Library.Sizes.RowHeight
+	local popupHeight = rowHeight * #MODES + 2
+	local popupWidth = 0
+
+	for _, mode in MODES do
+		local measured = Util.TextSize(Library:FormatLabel(mode), Library.Sizes.TextSmall, Library.Fonts.Value)
+		popupWidth = math.max(popupWidth, measured.X)
+	end
+	popupWidth = math.ceil(popupWidth) + 16
+
+	local function buildPopup()
+		if popupFrame then
+			return
+		end
+
+		local frame = Library:Panel({
+			Name = "BindModes",
+			Visible = false,
+			Size = UDim2.fromOffset(popupWidth, popupHeight),
+			Parent = Library.PopupHolder,
+		}, "Panel", "Outline")
+
+		-- The ticks must NOT share a parent with the list layout: UIListLayout
+		-- positions every GuiObject child with no opt-out, so eight tick frames
+		-- would be laid out as rows and shove the real ones out of the popup.
+		Library:CornerTicks(frame, "Accent")
+
+		local content = Library:Create("Frame", {
+			Name = "Content",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.fromScale(1, 1),
+			Parent = frame,
+		})
+
+		Util.Padding(content, 1, 1, 1, 1)
+		Util.ListLayout(content, 0)
+
+		popupRows = {}
+
+		for order, mode in MODES do
+			local rowFrame = Library:Panel({
+				Name = mode,
+				Size = UDim2.new(1, 0, 0, rowHeight),
+				LayoutOrder = order,
+				Parent = content,
+			}, "Panel", false)
+
+			local rowLabel = Library:Label({
+				Name = "Text",
+				Size = UDim2.fromScale(1, 1),
+				Font = Library.Fonts.Value,
+				TextSize = Library.Sizes.TextSmall,
+				Text = Library:FormatLabel(mode),
+				Parent = rowFrame,
+			}, "FontDim")
+
+			Util.Padding(rowLabel, 0, 6, 0, 6)
+
+			local rowHit = Library:HitButton(rowFrame, { Name = "Hit" })
+			Library:BindHover(rowHit, rowFrame, "Panel", "PanelRaised")
+
+			Library:GiveSignal(rowHit.MouseButton1Click:Connect(function()
+				Library:ClosePopup(popupHandle)
+				popupHandle = nil
+				element:SetValue({ Key = element.Value, Mode = mode })
+			end))
+
+			popupRows[mode] = rowLabel
+		end
+
+		popupFrame = frame
+	end
+
+	refreshPopup = function()
+		if not popupRows then
+			return
+		end
+
+		for mode, rowLabel in popupRows do
+			recolor(Library, rowLabel, "TextColor3", mode == element.Mode and "Accent" or "FontDim")
+		end
+	end
+
+	local function openModePopup()
+		buildPopup()
+		refreshPopup()
+
+		popupHandle = Library:OpenPopup(popupFrame, pill, {
+			Width = popupWidth,
+			Height = popupHeight,
+			OnClose = function()
+				popupHandle = nil
+			end,
+		})
+	end
+
+	--==========================================================
+	-- public value api
+	--==========================================================
+
+	--- Accepts "E", { "E", "Hold" } or { Key = "E", Mode = "Hold" }.
+	function element:SetValue(newValue, silent)
+		local key, mode = self.Value, self.Mode
+
+		if type(newValue) == "table" then
+			key = newValue.Key or newValue.key or newValue[1] or key
+			mode = newValue.Mode or newValue.mode or newValue[2] or mode
+		elseif newValue ~= nil then
+			key = newValue
+		end
+
+		self.Value = normalizeKey(key)
+		self.Mode = normalizeMode(mode) or self.Mode
+
+		reconcileState(silent)
+		self:Display()
+		overlay()
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	--- KeyPicker splits its callbacks: Callback carries the on/off state, while
+	--- Fire (bind or mode changed) drives ChangedCallback and OnChanged.
+	function element:Fire()
+		Library:SafeCallback(options.ChangedCallback, self.Value, self)
+
+		for _, callback in self.Callbacks do
+			Library:SafeCallback(callback, self.Value, self)
+		end
+	end
+
+	function element:OnClick(callback)
+		if type(callback) == "function" then
+			table.insert(clickCallbacks, callback)
+		end
+		return self
+	end
+
+	-- The overlay row carries the element's text, so renaming has to repost it.
+	local baseSetText = Base.Methods.SetText
+
+	function element:SetText(text)
+		baseSetText(self, text)
+		overlay()
+		return self
+	end
+
+	--==========================================================
+	-- input
+	--==========================================================
+
+	Library:GiveSignal(hit.MouseButton1Click:Connect(function()
+		beginCapture()
+	end))
+
+	Library:GiveSignal(hit.MouseButton2Click:Connect(function()
+		if element.Disabled then
+			return
+		end
+		if element.Capturing then
+			endCapture()
+			return
+		end
+		if os.clock() - lastCaptureEnd < CLICK_DEBOUNCE then
+			return
+		end
+		openModePopup()
+	end))
+
+	Library:GiveSignal(Library.InputBegan:Connect(function(input)
+		-- Destroyed is set by Base:Destroy. Without it this closure keeps the
+		-- element alive and a deleted bind still runs the user's callback.
+		if Library.Unloaded or element.Destroyed then
+			return
+		end
+
+		if element.Capturing then
+			local name = Util.InputName(input)
+			if not name then
+				return
+			end
+
+			endCapture()
+			element:SetValue(name == "ESC" and "None" or name)
+			return
+		end
+
+		if Library.CapturingInput or element.Disabled then
+			return
+		end
+		if UserInputService:GetFocusedTextBox() then
+			return
+		end
+		if element.Value == "None" or not Util.InputMatches(input, element.Value) then
+			return
+		end
+
+		if element.Mode == "Toggle" then
+			setState(not element.State)
+		elseif element.Mode == "Hold" then
+			setState(true)
+		end
+	end))
+
+	Library:GiveSignal(Library.InputEnded:Connect(function(input)
+		if Library.Unloaded or element.Destroyed or element.Mode ~= "Hold" then
+			return
+		end
+		if element.Value == "None" or not Util.InputMatches(input, element.Value) then
+			return
+		end
+
+		-- Releases are honoured even mid-capture or with a textbox focused: a
+		-- Hold bind stuck on is far worse than one that drops early.
+		setState(false)
+	end))
+
+	--==========================================================
+	-- teardown
+	--==========================================================
+
+	local baseDestroy = Base.Methods.Destroy
+
+	function element:Destroy()
+		endCapture()
+
+		if popupHandle then
+			Library:ClosePopup(popupHandle)
+			popupHandle = nil
+		end
+
+		if popupFrame then
+			Library:RemoveFromRegistry(popupFrame)
+			pcall(function()
+				popupFrame:Destroy()
+			end)
+			popupFrame = nil
+			popupRows = nil
+		end
+
+		local list = Library.KeybindList
+		if list and not self.NoUI then
+			list:Remove(overlayId)
+		end
+
+		table.clear(clickCallbacks)
+		baseDestroy(self)
+	end
+
+	Library:OnUnload(function()
+		-- Immediate, not deferred: nothing is left running to clear the flag.
+		if element.Capturing then
+			element.Capturing = false
+			if ActiveCapture == element then
+				ActiveCapture = nil
+			end
+			Library.CapturingInput = false
+		end
+	end)
+
+	--==========================================================
+	-- initial state
+	--==========================================================
+
+	if sync then
+		element.State = host.Value == true
+
+		host:OnChanged(function(hostValue)
+			if syncing then
+				return
+			end
+			syncing = true
+			setState(hostValue == true)
+			syncing = false
+		end)
+	end
+
+	reconcileState(true)
+	element:Display()
+	overlay()
+end
+
+--==============================================================
+-- constructors
+--==============================================================
+
+function KeyPicker.New(Library, container, index, options)
+	options = options or {}
+
+	local element = Base.Create(Library, container, "KeyPicker", index, options)
+
+	local row = Library:Row(container)
+	element.Row = row
+	element.ExpandedSize = row.Size
+
+	local label = Library:Label({
+		Name = "Label",
+		Size = UDim2.new(1, 0, 1, 0),
+		Text = Library:FormatLabel(element.Text),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = row,
+	}, element.Risky and "Risk" or "Font")
+	element.Label = label
+
+	local pill, stroke, value, hit = buildPill(Library, row, true, nil)
+	element.Hit = hit
+
+	-- The pill's width is only known once AutomaticSize has run, so the label
+	-- reserves its space reactively instead of guessing.
+	Library:GiveSignal(pill:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		label.Size = UDim2.new(1, -(pill.AbsoluteSize.X + 6), 1, 0)
+	end))
+
+	install(Library, element, options, nil, pill, stroke, value, hit)
+
+	return Base.Finish(element, Library.Options)
+end
+
+function KeyPicker.Attach(Library, host, index, options)
+	options = options or {}
+
+	-- Registered against the host's container so the groupbox still owns it,
+	-- but the pill (not the host row) is the element's own frame.
+	local element = Base.Create(Library, host.Parent, "KeyPicker", index, options)
+
+	local pill, stroke, value, hit = buildPill(Library, host.Right, false, nextAddonOrder(host.Right))
+	element.Row = pill
+	element.ExpandedSize = pill.Size
+	element.Hit = hit
+	element.Host = host
+
+	install(Library, element, options, host, pill, stroke, value, hit)
+
+	host.KeyPicker = element
+
+	return Base.Finish(element, Library.Options)
+end
+
+return KeyPicker
+end
+
+__modules["elements/Label"] = function()
+
+-- Sable :: elements/Label
+--
+-- Static caption row. It carries the addon slot (element.Right) so a bare
+-- caption can host an inline ColorPicker/KeyPicker exactly like a Toggle can,
+-- which is how Linoria-shaped scripts attach a bind to a piece of prose.
+
+local Base = require("elements/Base")
+
+local Label = {}
+
+--- Space kept between the caption and whatever sits in the addon slot.
+local ADDON_GAP = 4
+
+function Label.New(Library, container, text, doesWrap)
+	local wraps = doesWrap == true
+
+	local element = Base.Create(Library, container, "Label", nil, {
+		Text = text ~= nil and tostring(text) or "",
+	})
+
+	-- A wrapping label cannot know its height until the text has been laid out
+	-- against the real column width, so the row measures itself instead.
+	local row = Library:Row(container, wraps and 0 or Library.Sizes.RowHeight)
+	row.Name = "LabelRow"
+	if wraps then
+		row.AutomaticSize = Enum.AutomaticSize.Y
+	end
+
+	element.Row = row
+	element.ExpandedSize = row.Size
+	element.Value = element.Text
+
+	local caption = Library:Label({
+		Name = "Text",
+		Size = wraps and UDim2.new(1, 0, 0, 0) or UDim2.fromScale(1, 1),
+		AutomaticSize = wraps and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
+		TextWrapped = wraps,
+		TextYAlignment = wraps and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
+		TextSize = Library.Sizes.Text,
+		Text = Library:FormatLabel(element.Text),
+		Parent = row,
+	}, "FontDim")
+
+	element.Label = caption
+
+	element.Right = Library:Create("Frame", {
+		Name = "Right",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(0, 0, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Parent = row,
+	})
+
+	Library:Create("UIListLayout", {
+		Name = "List",
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, ADDON_GAP),
+		Parent = element.Right,
+	})
+
+	-- Attached pickers grow the slot; give the text back only what is left so a
+	-- long caption never runs underneath a swatch or a bind.
+	local function reserve()
+		local used = element.Right.AbsoluteSize.X
+		if used > 0 then
+			used += ADDON_GAP
+		end
+		caption.Size = UDim2.new(1, -used, wraps and 0 or 1, 0)
+	end
+
+	Library:GiveSignal(element.Right:GetPropertyChangedSignal("AbsoluteSize"):Connect(reserve))
+
+	function element:Display()
+		self.Value = self.Text
+		self.Label.Text = self.Library:FormatLabel(self.Text)
+	end
+
+	--- Base:SetText is the normal entry point; this exists so a Label answers
+	--- the same :SetValue(value, silent) contract every other element does.
+	function element:SetValue(value, silent)
+		self:SetText(value ~= nil and tostring(value) or "")
+		self:Display()
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	if wraps then
+		-- AutomaticSize would immediately undo the zero height SetVisible uses
+		-- to collapse a row, so it has to be off for as long as the row is.
+		function element:SetVisible(visible)
+			visible = visible ~= false
+			row.AutomaticSize = visible and Enum.AutomaticSize.Y or Enum.AutomaticSize.None
+			return Base.Methods.SetVisible(self, visible)
+		end
+	end
+
+	return Base.Finish(element, nil)
+end
+
+return Label
+end
+
+__modules["elements/Slider"] = function()
+
+-- Sable :: elements/Slider
+--
+-- The segmented instrument slider. The track is a fixed number of equal-width
+-- cells that light up as the value rises -- nothing ever resizes, which is what
+-- separates a piece of equipment from a progress bar. The right-hand readout
+-- carries the exact value, because 16 cells cannot.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local Slider = {}
+
+local GAP = 6 -- label <-> track <-> readout
+local CELL_GAP = 1 -- gutter between cells
+local LABEL_MAX = 120 -- a long label must never eat the whole row
+local SEGMENT_MAX = 64
+local ROUNDING_MAX = 6
+
+function Slider.New(Library, container, index, options)
+	options = options or {}
+
+	local element = Base.Create(Library, container, "Slider", index, options)
+
+	element.Min = tonumber(options.Min) or 0
+	element.Max = tonumber(options.Max) or 100
+	element.Rounding = math.floor(Util.Clamp(tonumber(options.Rounding) or 0, 0, ROUNDING_MAX))
+	element.Suffix = tostring(options.Suffix or "")
+	element.Compact = options.Compact == true
+	element.Segments =
+		math.floor(Util.Clamp(tonumber(options.Segments) or Library.Sizes.Segments, 1, SEGMENT_MAX))
+	element.Value = element.Min
+
+	--==============================================================
+	-- visuals
+	--==============================================================
+
+	local row = Library:Row(container)
+	element.Row = row
+	element.ExpandedSize = row.Size
+
+	local label = Library:Label({
+		Name = "Label",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(0, 0, 1, 0),
+		Text = Library:FormatLabel(element.Text),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Visible = not element.Compact,
+		Parent = row,
+	}, element.Risky and "Risk" or "Font")
+	element.Label = label
+
+	-- Declared ahead of the readout: its registry entry closes over this so a
+	-- theme switch mid-drag still resolves to the active colour.
+	local dragging = false
+
+	local function readoutKey()
+		if element.Disabled then
+			return "FontFaint"
+		end
+		return dragging and "Font" or "FontDim"
+	end
+
+	local readout = Library:Create("TextLabel", {
+		Name = "Readout",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(0, 0, 1, 0),
+		Font = Library.Fonts.Value,
+		TextSize = Library.Sizes.TextSmall,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Text = "",
+		Theme = {
+			TextColor3 = function()
+				return Library:GetColor(readoutKey())
+			end,
+		},
+		Parent = row,
+	})
+
+	local trough = Library:Panel({
+		Name = "Track",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 0, Library.Sizes.Track),
+		Parent = row,
+	}, "PanelSunken", "Outline")
+
+	-- The cells live one level down so the trough's inset does not also shrink
+	-- the hit button, which needs to cover the whole trough (and then some).
+	local cells = Library:Create("Frame", {
+		Name = "Cells",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1),
+		Parent = trough,
+	})
+
+	-- No right padding: the trailing cell's own gutter supplies it, so the
+	-- inset reads as 1px on both ends.
+	Util.Padding(cells, 1, 0, 1, 1)
+
+	Library:Create("UIListLayout", {
+		Name = "List",
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Left,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, CELL_GAP),
+		Parent = cells,
+	})
+
+	local segments = table.create(element.Segments)
+	local cellWidth = 1 / element.Segments
+
+	for cellIndex = 1, element.Segments do
+		-- Each cell carries its own scheme KEY, never a baked Color3, so a live
+		-- theme change repaints filled and empty cells correctly.
+		local record = { Key = "PanelSunken" }
+
+		record.Frame = Library:Create("Frame", {
+			Name = ("Cell%02d"):format(cellIndex),
+			BorderSizePixel = 0,
+			Size = UDim2.new(cellWidth, -CELL_GAP, 1, 0),
+			LayoutOrder = cellIndex,
+			Theme = {
+				BackgroundColor3 = function()
+					return Library:GetColor(record.Key)
+				end,
+			},
+			Parent = cells,
+		})
+
+		segments[cellIndex] = record
+	end
+
+	-- Taller and wider than the 8px trough: an 8px grab target is a nuisance.
+	local hit = Library:HitButton(trough, {
+		Name = "Hit",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(1, 4, 1, 10),
+	})
+	element.Hit = hit
+
+	--==============================================================
+	-- value math
+	--==============================================================
+
+	--- A Max below Min collapses to a single-value slider rather than dividing
+	--- by a negative span.
+	local function bounds()
+		local low = element.Min
+		local high = element.Max
+		if high < low then
+			high = low
+		end
+		return low, high
+	end
+
+	--- Util.FormatNumber's integer path evaluates math.floor(v - 0.5) for
+	--- negatives, which renders -5 as "-6". The decimal path (string.format) is
+	--- correct, so only the integer case is handled locally.
+	local function formatValue(value)
+		if element.Rounding <= 0 then
+			return tostring(math.floor(value + 0.5))
+		end
+		return Util.FormatNumber(value, element.Rounding)
+	end
+
+	local function normalize(value)
+		local low, high = bounds()
+		local number = tonumber(value)
+		if not number then
+			number = low
+		end
+		-- Clamp last: a bound that is off the rounding grid still has to be
+		-- reachable exactly.
+		return Util.Clamp(Util.Round(number, element.Rounding), low, high)
+	end
+
+	local function measure(text, textSize, font)
+		return math.ceil(Util.TextSize(text, textSize, font).X)
+	end
+
+	--==============================================================
+	-- layout
+	--==============================================================
+
+	--- The readout is sized for the widest value it can ever show, so the track
+	--- does not twitch as digits come and go.
+	local function relayout()
+		local low, high = bounds()
+		local readoutWidth = math.max(
+			measure(formatValue(low) .. element.Suffix, Library.Sizes.TextSmall, Library.Fonts.Value),
+			measure(formatValue(high) .. element.Suffix, Library.Sizes.TextSmall, Library.Fonts.Value)
+		) + 2
+
+		readout.Size = UDim2.new(0, readoutWidth, 1, 0)
+
+		local labelWidth = 0
+		if not element.Compact then
+			labelWidth =
+				math.min(measure(label.Text, Library.Sizes.Text, Library.Fonts.Label) + 1, LABEL_MAX)
+		end
+
+		label.Visible = not element.Compact
+		label.Size = UDim2.new(0, labelWidth, 1, 0)
+
+		local left = labelWidth > 0 and labelWidth + GAP or 0
+		trough.Position = UDim2.new(0, left, 0.5, 0)
+		trough.Size = UDim2.new(1, -(left + GAP + readoutWidth), 0, Library.Sizes.Track)
+	end
+
+	local function paintReadout(animate)
+		local color = Library:GetColor(readoutKey())
+		if animate then
+			Library:Tween(readout, { TextColor3 = color }, Library.Motion.Fast)
+		else
+			readout.TextColor3 = color
+		end
+	end
+
+	--==============================================================
+	-- api
+	--==============================================================
+
+	function element:Display()
+		local low, high = bounds()
+		local alpha = high > low and Util.Alpha(self.Value, low, high) or 0
+
+		-- Crossing into a cell lights it: any value above Min shows at least one.
+		local filled = 0
+		if alpha > 0 then
+			filled = math.max(1, math.ceil(alpha * self.Segments - 1e-4))
+		end
+
+		local fillKey = self.Disabled and "AccentDim" or "Accent"
+
+		for cellIndex, record in segments do
+			local key = cellIndex <= filled and fillKey or "PanelSunken"
+			if record.Key ~= key then
+				record.Key = key
+				record.Frame.BackgroundColor3 = Library:GetColor(key)
+			end
+		end
+
+		readout.Text = formatValue(self.Value) .. self.Suffix
+
+		return self
+	end
+
+	function element:SetValue(value, silent)
+		self.Value = normalize(value)
+		self:Display()
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	--- Shared tail of SetMin/SetMax: the readout may need a different width and
+	--- the current value may no longer be in range.
+	local function rebound()
+		relayout()
+
+		local clamped = normalize(element.Value)
+		if clamped ~= element.Value then
+			element:SetValue(clamped)
+		else
+			element:Display()
+		end
+	end
+
+	function element:SetMin(value)
+		self.Min = tonumber(value) or self.Min
+		rebound()
+		return self
+	end
+
+	function element:SetMax(value)
+		self.Max = tonumber(value) or self.Max
+		rebound()
+		return self
+	end
+
+	-- Overrides Base so the label column is re-measured when the text changes.
+	function element:SetText(text)
+		self.Text = text or ""
+		label.Text = Library:FormatLabel(self.Text)
+		relayout()
+		return self
+	end
+
+	element.OnDisabledChanged = function()
+		paintReadout(false)
+		element:Display()
+	end
+
+	--==============================================================
+	-- dragging
+	--==============================================================
+
+	local function applyFromMouse()
+		local width = trough.AbsoluteSize.X
+		if width <= 0 then
+			return
+		end
+
+		local alpha = Util.Clamp((Util.MousePosition().X - trough.AbsolutePosition.X) / width, 0, 1)
+		local low, high = bounds()
+		local value = normalize(low + alpha * (high - low))
+
+		if value ~= element.Value then
+			element:SetValue(value)
+		end
+	end
+
+	local function isDragInput(input)
+		return input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+	end
+
+	Library:GiveSignal(hit.InputBegan:Connect(function(input)
+		if Library.Unloaded or element.Disabled or not isDragInput(input) then
+			return
+		end
+
+		dragging = true
+		paintReadout(true)
+		applyFromMouse()
+	end))
+
+	-- Movement and release are tracked on the library-wide signals, not on the
+	-- button, so a drag survives the cursor leaving the row.
+	Library:GiveSignal(Library.InputChanged:Connect(function(input)
+		if not dragging then
+			return
+		end
+		if Library.Unloaded then
+			dragging = false
+			return
+		end
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+
+		applyFromMouse()
+	end))
+
+	Library:GiveSignal(Library.InputEnded:Connect(function(input)
+		if not dragging or not isDragInput(input) then
+			return
+		end
+
+		dragging = false
+		paintReadout(true)
+	end))
+
+	--==============================================================
+	-- init
+	--==============================================================
+
+	relayout()
+	element:SetValue(options.Default, true)
+
+	return Base.Finish(element, Library.Options)
+end
+
+return Slider
+end
+
+__modules["elements/Toggle"] = function()
+
+-- Sable :: elements/Toggle
+--
+-- Label on the left, a hard-edged checkbox in the shared `Right` addon slot so
+-- inline ColorPickers / KeyPickers can dock to its left. The whole row is the
+-- hit target; the box itself is only a readout.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local Toggle = {}
+
+function Toggle.New(Library, container, index, options)
+	options = options or {}
+
+	local element = Base.Create(Library, container, "Toggle", index, options)
+	element.Value = options.Default and true or false
+
+	local row = Library:Row(container)
+	element.Row = row
+	element.ExpandedSize = row.Size
+
+	-- Inner mark is derived from the control metric so the box keeps its
+	-- 3px inset if Sizes.Control is ever retuned.
+	local mark = math.max(3, Library.Sizes.Control - 6)
+	local hovering = false
+
+	--==============================================================
+	-- colour sources
+	--==============================================================
+
+	-- These are registered as function sources rather than plain scheme keys
+	-- because the colour depends on live element state as well as the palette.
+	-- One entry per instance then stays correct across both theme switches and
+	-- value changes, instead of stacking a new registry entry on every repaint.
+
+	local function labelColor(scheme)
+		local base
+		if element.Disabled then
+			base = scheme.FontFaint
+		elseif element.Value then
+			base = element.Risky and scheme.Risk or scheme.Font
+		else
+			base = scheme.FontDim
+		end
+
+		-- Rows are flat -- there is no hover fill to lean on, so the label
+		-- itself carries the affordance.
+		if hovering and not element.Disabled then
+			return Util.Shift(base, 1.25)
+		end
+		return base
+	end
+
+	local function strokeColor(scheme)
+		if element.Value and not element.Disabled then
+			return scheme.Accent
+		end
+		return scheme.Outline
+	end
+
+	local function markColor(scheme)
+		return element.Disabled and scheme.AccentDim or scheme.Accent
+	end
+
+	--==============================================================
+	-- visuals
+	--==============================================================
+
+	element.Label = Library:Label({
+		Name = "Label",
+		Size = UDim2.new(1, -(Library.Sizes.Control + 6), 1, 0),
+		Text = Library:FormatLabel(element.Text),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = row,
+	}, labelColor)
+
+	element.Right = Library:Create("Frame", {
+		Name = "Right",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(0, 0, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.X,
+		-- Above the row-wide hit button, so an attached picker still receives
+		-- its own clicks instead of the row swallowing them.
+		ZIndex = 3,
+		Parent = row,
+	})
+
+	Library:Create("UIListLayout", {
+		Name = "List",
+		FillDirection = Enum.FillDirection.Horizontal,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 4),
+		Parent = element.Right,
+	})
+
+	local box = Library:Panel({
+		Name = "Box",
+		Size = UDim2.fromOffset(Library.Sizes.Control, Library.Sizes.Control),
+		LayoutOrder = 100,
+		Parent = element.Right,
+	}, "PanelSunken", false)
+
+	local stroke = Util.Stroke(box, strokeColor(Library.Scheme), Library.Sizes.Outline)
+	Library:AddToRegistry(stroke, { Color = strokeColor })
+
+	local fill = Library:Create("Frame", {
+		Name = "Fill",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(0, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Theme = { BackgroundColor3 = markColor },
+		Parent = box,
+	})
+
+	element.Box = box
+	element.Fill = fill
+
+	element.Hit = Library:HitButton(row, { ZIndex = 1 })
+
+	-- The addon slot auto-sizes, so the label has to yield width every time a
+	-- picker docks beside the box.
+	local function syncLabelWidth()
+		element.Label.Size = UDim2.new(1, -(element.Right.AbsoluteSize.X + 6), 1, 0)
+	end
+
+	Library:GiveSignal(element.Right:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncLabelWidth))
+	syncLabelWidth()
+
+	--==============================================================
+	-- state
+	--==============================================================
+
+	local function paintLabel()
+		if Library.Unloaded then
+			return
+		end
+		Library:Tween(element.Label, { TextColor3 = labelColor(Library.Scheme) }, Library.Motion.Fast)
+	end
+
+	function element:Display()
+		if Library.Unloaded then
+			return self
+		end
+
+		local on = self.Value == true
+		local motion = Library.Motion.Fast
+
+		-- Size and transparency move together over 0.09s: the mark punches in
+		-- rather than fading up.
+		Library:Tween(fill, {
+			Size = on and UDim2.fromOffset(mark, mark) or UDim2.fromOffset(0, 0),
+			BackgroundTransparency = on and 0 or 1,
+		}, motion)
+
+		fill.BackgroundColor3 = markColor(Library.Scheme)
+		Library:Tween(stroke, { Color = strokeColor(Library.Scheme) }, motion)
+		paintLabel()
+
+		return self
+	end
+
+	function element:SetValue(value, silent)
+		self.Value = value and true or false
+		self:Display()
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	element.OnDisabledChanged = function(disabled)
+		-- MouseLeave never arrives once the button stops being interactable.
+		if disabled then
+			hovering = false
+		end
+		element:Display()
+	end
+
+	--==============================================================
+	-- input
+	--==============================================================
+
+	Library:GiveSignal(element.Hit.MouseButton1Click:Connect(function()
+		if Library.Unloaded or element.Disabled then
+			return
+		end
+		element:SetValue(not element.Value)
+	end))
+
+	Library:GiveSignal(element.Hit.MouseEnter:Connect(function()
+		if element.Disabled then
+			return
+		end
+		hovering = true
+		paintLabel()
+	end))
+
+	Library:GiveSignal(element.Hit.MouseLeave:Connect(function()
+		hovering = false
+		paintLabel()
+	end))
+
+	element:Display()
+
+	return Base.Finish(element, Library.Toggles)
+end
+
+return Toggle
+end
+
+__modules["elements/init"] = function()
+
+-- Sable :: elements/init
+--
+-- Installs the Add* constructors onto the shared container metatable, and the
+-- inline picker attachments onto the element base. This is the only place that
+-- knows the full element roster.
+
+local Base = require("elements/Base")
+
+local Label = require("elements/Label")
+local Button = require("elements/Button")
+local Divider = require("elements/Divider")
+local Toggle = require("elements/Toggle")
+local Slider = require("elements/Slider")
+local Input = require("elements/Input")
+local Dropdown = require("elements/Dropdown")
+local ColorPicker = require("elements/ColorPicker")
+local KeyPicker = require("elements/KeyPicker")
+
+local Elements = {}
+
+Elements.Modules = {
+	Label = Label,
+	Button = Button,
+	Divider = Divider,
+	Toggle = Toggle,
+	Slider = Slider,
+	Input = Input,
+	Dropdown = Dropdown,
+	ColorPicker = ColorPicker,
+	KeyPicker = KeyPicker,
+}
+
+--- `Container` is the shared __index table used by groupboxes, tabbox tabs and
+--- dependency boxes, so installing here covers all three.
+function Elements.Install(Library, Container)
+	function Container:AddLabel(text, doesWrap)
+		return Label.New(Library, self, text, doesWrap)
+	end
+
+	function Container:AddButton(...)
+		return Button.New(Library, self, ...)
+	end
+
+	function Container:AddDivider()
+		return Divider.New(Library, self)
+	end
+
+	function Container:AddToggle(index, options)
+		return Toggle.New(Library, self, index, options)
+	end
+
+	function Container:AddSlider(index, options)
+		return Slider.New(Library, self, index, options)
+	end
+
+	function Container:AddInput(index, options)
+		return Input.New(Library, self, index, options)
+	end
+
+	function Container:AddDropdown(index, options)
+		return Dropdown.New(Library, self, index, options)
+	end
+
+	function Container:AddColorPicker(index, options)
+		return ColorPicker.New(Library, self, index, options)
+	end
+
+	function Container:AddKeyPicker(index, options)
+		return KeyPicker.New(Library, self, index, options)
+	end
+
+	-- Inline pickers live in an element's `Right` slot, left of its own control.
+	function Base.Methods:AddColorPicker(index, options)
+		assert(self.Right, ("[Sable] %s does not support an inline ColorPicker"):format(self.Type))
+		return ColorPicker.Attach(Library, self, index, options)
+	end
+
+	function Base.Methods:AddKeyPicker(index, options)
+		assert(self.Right, ("[Sable] %s does not support an inline KeyPicker"):format(self.Type))
+		return KeyPicker.Attach(Library, self, index, options)
+	end
+end
+
+return Elements
+end
+
+__modules["init"] = function()
+
+-- Sable :: root
+--
+-- Owns the ScreenGui, the shared input signals, the popup layer, unload
+-- bookkeeping, and every drawing primitive the rest of the library builds on.
+-- Nothing below this file may require() it -- containers and elements receive
+-- `Library` as an argument instead, which keeps the dependency graph acyclic.
+
+local Util = require("Util")
+local Signal = require("Signal")
+local Theme = require("Theme")
+
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+-- Declared here rather than only inside Theme.Install so the shape of Library
+-- is visible at a glance, and so static analysis of the bundle stays clean.
+local Library = {
+	Scheme = {} :: any,
+	Sizes = {} :: any,
+	Fonts = {} :: any,
+	Motion = {} :: any,
+}
+
+Library.Name = "Sable"
+Library.Version = "1.0.0"
+Library.Util = Util
+Library.Signal = Signal
+
+-- Element stores, keyed by the index string passed to AddToggle/AddSlider/...
+Library.Toggles = {}
+Library.Options = {}
+
+Library.Windows = {}
+Library.Registry = {}
+Library.Signals = {}
+Library.UnloadCallbacks = {}
+
+Library.Toggled = false
+Library.Unloaded = false
+
+--- Element label casing. Users write "Team check", Sable renders "TEAM CHECK".
+Library.UppercaseLabels = true
+
+-- Canonical spelling, matching what Util.InputName reports for a real key
+-- press. Util.CanonicalName folds "INSERT"/"Insert" onto this too, but storing
+-- the canonical form keeps the keybind pill and a re-capture consistent.
+Library.MenuKeybind = "INS"
+--- Set by KeyPicker while it waits for a bind so the menu hotkey (and any
+--- other bind) does not fire on the very keystroke being captured.
+Library.CapturingInput = false
+
+Library.NotifySide = "Right"
+
+Theme.Install(Library)
+Library.MenuFadeTime = Library.Motion.Fade
+
+Library.MenuToggled = Signal.new("MenuToggled")
+Library.InputBegan = Signal.new("InputBegan")
+Library.InputEnded = Signal.new("InputEnded")
+Library.InputChanged = Signal.new("InputChanged")
+Library.RenderStepped = Signal.new("RenderStepped")
+
+--==============================================================
+-- lifecycle
+--==============================================================
+
+--- Hands a connection to the library so Unload() can tear it down. Every
+--- connection Sable makes must go through here.
+function Library:GiveSignal(connection)
+	table.insert(self.Signals, connection)
+	return connection
+end
+
+function Library:OnUnload(callback)
+	table.insert(self.UnloadCallbacks, callback)
+	return callback
+end
+
+--- Runs a user callback without letting an error in it break the menu.
+function Library:SafeCallback(fn, ...)
+	if type(fn) ~= "function" then
+		return
+	end
+
+	local packed = table.pack(...)
+	local ok, err = pcall(function()
+		return fn(table.unpack(packed, 1, packed.n))
+	end)
+
+	if not ok then
+		warn(("[Sable] callback error: %s"):format(tostring(err)))
+		if self.Notify and not self.Unloaded then
+			self:Notify({
+				Title = "Callback error",
+				Description = tostring(err),
+				Time = 7,
+				Risk = true,
+			})
+		end
+	end
+end
+
+function Library:Unload()
+	if self.Unloaded then
+		return
+	end
+	self.Unloaded = true
+
+	self:ClosePopup()
+
+	for _, callback in self.UnloadCallbacks do
+		pcall(callback)
+	end
+
+	for _, connection in self.Signals do
+		pcall(function()
+			connection:Disconnect()
+		end)
+	end
+	table.clear(self.Signals)
+
+	if self.ScreenGui then
+		pcall(function()
+			self.ScreenGui:Destroy()
+		end)
+	end
+
+	table.clear(self.Toggles)
+	table.clear(self.Options)
+	table.clear(self.Registry)
+	table.clear(self.Windows)
+
+	if getgenv then
+		local env = getgenv()
+		if env.Sable == self then
+			env.Sable = nil
+		end
+	end
+end
+
+--==============================================================
+-- screen gui
+--==============================================================
+
+local function randomName(length)
+	local alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	local out = table.create(length)
+	for _ = 1, length do
+		local index = math.random(1, #alphabet)
+		table.insert(out, alphabet:sub(index, index))
+	end
+	return table.concat(out)
+end
+
+local screenGui = Util.Create("ScreenGui", {
+	Name = randomName(12),
+	DisplayOrder = 9999,
+	-- MUST stay false: it puts AbsolutePosition in the same coordinate space
+	-- as UserInputService:GetMouseLocation(), which every hit test relies on.
+	IgnoreGuiInset = false,
+	ResetOnSpawn = false,
+	AutoLocalize = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+
+Util.ProtectGui(screenGui)
+screenGui.Parent = Util.GetGuiParent()
+Library.ScreenGui = screenGui
+
+--- Full-bleed transparent layer. ZIndex on the holder decides what stacks
+--- above what, because ZIndexBehavior is Sibling.
+local function makeHolder(name, zIndex)
+	return Util.Create("Frame", {
+		Name = name,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = zIndex,
+		Parent = screenGui,
+	})
+end
+
+Library.WindowHolder = makeHolder("Windows", 1)
+Library.HudHolder = makeHolder("Hud", 20)
+Library.PopupHolder = makeHolder("Popups", 100)
+Library.NotificationHolder = makeHolder("Notifications", 200)
+Library.TooltipHolder = makeHolder("Tooltips", 300)
+
+--==============================================================
+-- input plumbing
+--==============================================================
+
+Library:GiveSignal(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	Library.InputBegan:Fire(input, gameProcessed)
+end))
+
+Library:GiveSignal(UserInputService.InputEnded:Connect(function(input, gameProcessed)
+	Library.InputEnded:Fire(input, gameProcessed)
+end))
+
+Library:GiveSignal(UserInputService.InputChanged:Connect(function(input, gameProcessed)
+	Library.InputChanged:Fire(input, gameProcessed)
+end))
+
+Library:GiveSignal(RunService.RenderStepped:Connect(function(delta)
+	Library.RenderStepped:Fire(delta)
+end))
+
+--==============================================================
+-- text
+--==============================================================
+
+--- Applies the library-wide label casing.
+function Library:FormatLabel(text)
+	text = tostring(text or "")
+	if self.UppercaseLabels then
+		return text:upper()
+	end
+	return text
+end
+
+--- Chrome text: cased + letterspaced. Window title, tab names, group headers
+--- only -- never element labels, which would get unreadably wide.
+function Library:Chrome(text)
+	return Util.Letterspace(self:FormatLabel(text))
+end
+
+--==============================================================
+-- drawing primitives
+--==============================================================
+
+--- Instance.new with two extra keys:
+---   Theme = { PropertyName = "SchemeKey" }  auto-registers for live theming
+---   Hud   = true                            marks it as always-visible chrome
+function Library:Create(className, props)
+	props = props or {}
+
+	local themeMap = props.Theme
+	local isHud = props.Hud
+	props.Theme = nil
+	props.Hud = nil
+
+	local instance = Util.Create(className, props)
+
+	if themeMap then
+		self:AddToRegistry(instance, themeMap, isHud)
+	end
+
+	return instance
+end
+
+--- A filled, hairline-outlined rectangle. Returns frame, stroke.
+--- Pass `false` for strokeKey to skip the outline entirely.
+function Library:Panel(props, fillKey, strokeKey)
+	props = props or {}
+	props.BorderSizePixel = 0
+	props.Theme = { BackgroundColor3 = fillKey or "Panel" }
+
+	local frame = self:Create("Frame", props)
+
+	if strokeKey == false then
+		return frame, nil
+	end
+
+	local key = strokeKey or "Outline"
+	local stroke = Util.Stroke(frame, self:GetColor(key), self.Sizes.Outline)
+	self:AddToRegistry(stroke, { Color = key })
+
+	return frame, stroke
+end
+
+function Library:Label(props, colorKey)
+	props = props or {}
+	props.BackgroundTransparency = props.BackgroundTransparency or 1
+	props.BorderSizePixel = 0
+	props.Font = props.Font or self.Fonts.Label
+	props.TextSize = props.TextSize or self.Sizes.Text
+	props.TextXAlignment = props.TextXAlignment or Enum.TextXAlignment.Left
+	props.TextYAlignment = props.TextYAlignment or Enum.TextYAlignment.Center
+	props.Theme = { TextColor3 = colorKey or "Font" }
+	return self:Create("TextLabel", props)
+end
+
+--- Standard full-width element row, parented into a container's list layout.
+function Library:Row(container, height)
+	return self:Create("Frame", {
+		Name = "Row",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, height or self.Sizes.RowHeight),
+		LayoutOrder = #container.Elements + 1,
+		Parent = container.Container,
+	})
+end
+
+--- Invisible TextButton used purely for hit testing. Frames do not receive
+--- input, so anything clickable needs one of these on top.
+function Library:HitButton(parent, props)
+	props = props or {}
+	props.Name = props.Name or "Hit"
+	props.Text = ""
+	props.BackgroundTransparency = 1
+	props.BorderSizePixel = 0
+	props.AutoButtonColor = false
+	props.Size = props.Size or UDim2.fromScale(1, 1)
+	props.ZIndex = props.ZIndex or 5
+	props.Parent = parent
+	return self:Create("TextButton", props)
+end
+
+--- L-shaped corner marks. The signature detail of the tactical look -- used on
+--- the window frame and popups, deliberately NOT on every groupbox.
+function Library:CornerTicks(parent, colorKey, length, thickness)
+	length = length or self.Sizes.Tick
+	thickness = thickness or self.Sizes.TickThickness
+	colorKey = colorKey or "Accent"
+
+	local corners = {
+		Vector2.new(0, 0),
+		Vector2.new(1, 0),
+		Vector2.new(0, 1),
+		Vector2.new(1, 1),
+	}
+
+	local ticks = {}
+	for index, corner in corners do
+		local anchor = corner
+		local position = UDim2.fromScale(corner.X, corner.Y)
+
+		-- Both arms share the corner's anchor, so they grow inward for free.
+		table.insert(
+			ticks,
+			self:Create("Frame", {
+				Name = ("Tick%dH"):format(index),
+				AnchorPoint = anchor,
+				Position = position,
+				Size = UDim2.fromOffset(length, thickness),
+				BorderSizePixel = 0,
+				ZIndex = 10,
+				Theme = { BackgroundColor3 = colorKey },
+				Parent = parent,
+			})
+		)
+
+		table.insert(
+			ticks,
+			self:Create("Frame", {
+				Name = ("Tick%dV"):format(index),
+				AnchorPoint = anchor,
+				Position = position,
+				Size = UDim2.fromOffset(thickness, length),
+				BorderSizePixel = 0,
+				ZIndex = 10,
+				Theme = { BackgroundColor3 = colorKey },
+				Parent = parent,
+			})
+		)
+	end
+
+	return ticks
+end
+
+function Library:Tween(instance, props, info)
+	return Util.Tween(instance, props, info or self.Motion.Fast)
+end
+
+--- Consistent hover feel for every interactive surface.
+function Library:BindHover(button, target, normalKey, hoverKey)
+	local function apply(key)
+		if self.Unloaded then
+			return
+		end
+		Util.Tween(target, { BackgroundColor3 = self:GetColor(key) }, self.Motion.Fast)
+	end
+
+	self:GiveSignal(button.MouseEnter:Connect(function()
+		if button:GetAttribute("SableDisabled") then
+			return
+		end
+		apply(hoverKey)
+	end))
+
+	self:GiveSignal(button.MouseLeave:Connect(function()
+		apply(normalKey)
+	end))
+end
+
+--==============================================================
+-- dragging
+--==============================================================
+
+function Library:MakeDraggable(handle, target)
+	local dragging = false
+	local startMouse = Vector2.zero
+	local startPos = Vector2.zero
+
+	self:GiveSignal(handle.InputBegan:Connect(function(input)
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+		dragging = true
+		startMouse = Util.MousePosition()
+		startPos = target.AbsolutePosition
+		self:ClosePopup()
+	end))
+
+	self:GiveSignal(self.InputChanged:Connect(function(input)
+		if not dragging then
+			return
+		end
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+
+		local delta = Util.MousePosition() - startMouse
+		local viewport = self.ScreenGui.AbsoluteSize
+		local size = target.AbsoluteSize
+
+		-- Keep at least a sliver on screen so a window can never be lost.
+		local x = Util.Clamp(startPos.X + delta.X, -size.X + 48, viewport.X - 48)
+		local y = Util.Clamp(startPos.Y + delta.Y, 0, math.max(0, viewport.Y - 24))
+
+		target.Position = UDim2.fromOffset(math.floor(x), math.floor(y))
+	end))
+
+	self:GiveSignal(self.InputEnded:Connect(function(input)
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			dragging = false
+		end
+	end))
+end
+
+--==============================================================
+-- popups (dropdown lists, colour pickers, bind capture)
+--==============================================================
+
+Library.ActivePopup = nil
+
+function Library:ClosePopup(popup)
+	local active = self.ActivePopup
+	if not active then
+		return
+	end
+	if popup and popup ~= active then
+		return
+	end
+
+	self.ActivePopup = nil
+
+	if active.Connection then
+		active.Connection:Disconnect()
+	end
+
+	pcall(function()
+		active.Frame.Visible = false
+	end)
+
+	if active.OnClose then
+		self:SafeCallback(active.OnClose)
+	end
+end
+
+--- Shows `frame` in the popup layer, positioned under `anchor` (flipping above
+--- it when there is no room below). Only one popup is ever open.
+---
+--- options = { Height = number (required), Width = number?, Gap = number?,
+---             OnClose = function? }
+function Library:OpenPopup(frame, anchor, options)
+	options = options or {}
+	self:ClosePopup()
+
+	local holder = self.PopupHolder
+	frame.Parent = holder
+
+	local gap = options.Gap or 2
+	local width = options.Width or anchor.AbsoluteSize.X
+	local height = options.Height or frame.AbsoluteSize.Y
+	local viewport = holder.AbsoluteSize
+
+	local origin = anchor.AbsolutePosition - holder.AbsolutePosition
+	local x = origin.X
+	local y = origin.Y + anchor.AbsoluteSize.Y + gap
+
+	if y + height > viewport.Y - 4 then
+		local above = origin.Y - height - gap
+		if above >= 4 then
+			y = above
+		end
+	end
+
+	x = Util.Clamp(x, 4, math.max(4, viewport.X - width - 4))
+	y = Util.Clamp(y, 4, math.max(4, viewport.Y - height - 4))
+
+	frame.Position = UDim2.fromOffset(math.floor(x), math.floor(y))
+	frame.Size = UDim2.fromOffset(math.floor(width), math.floor(height))
+	frame.Visible = true
+
+	local popup = {
+		Frame = frame,
+		Anchor = anchor,
+		OnClose = options.OnClose,
+	}
+	self.ActivePopup = popup
+
+	-- Deferred so the click that opened this popup cannot immediately close it.
+	task.defer(function()
+		if self.ActivePopup ~= popup then
+			return
+		end
+		popup.Connection = self.InputBegan:Connect(function(input)
+			if
+				input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch
+			then
+				return
+			end
+			if Util.MouseOver(frame) or Util.MouseOver(anchor) then
+				return
+			end
+			self:ClosePopup(popup)
+		end)
+	end)
+
+	return popup
+end
+
+--==============================================================
+-- tooltips
+--==============================================================
+
+local tooltipFrame = Library:Panel({
+	Name = "Tooltip",
+	Visible = false,
+	AutomaticSize = Enum.AutomaticSize.XY,
+	Size = UDim2.fromOffset(0, 0),
+	ZIndex = 300,
+	Parent = Library.TooltipHolder,
+}, "PanelRaised", "Outline")
+
+Util.Padding(tooltipFrame, 4, 6, 4, 6)
+
+local tooltipLabel = Library:Label({
+	Name = "Text",
+	AutomaticSize = Enum.AutomaticSize.XY,
+	Size = UDim2.fromOffset(0, 0),
+	TextSize = Library.Sizes.TextSmall,
+	ZIndex = 301,
+	Parent = tooltipFrame,
+}, "Font")
+
+Library.TooltipFrame = tooltipFrame
+
+--- Shows `text` while the cursor is over `guiObject`. When the object carries
+--- the SableDisabled attribute, `disabledText` is shown instead (if given).
+function Library:GiveTooltip(guiObject, text, disabledText)
+	if not text and not disabledText then
+		return
+	end
+
+	local state = { Text = text, DisabledText = disabledText }
+	guiObject:SetAttribute("SableHasTooltip", true)
+
+	local hovering = false
+	local moveConnection = nil
+
+	local function hide()
+		hovering = false
+		if moveConnection then
+			moveConnection:Disconnect()
+			moveConnection = nil
+		end
+		tooltipFrame.Visible = false
+	end
+
+	self:GiveSignal(guiObject.MouseEnter:Connect(function()
+		local disabled = guiObject:GetAttribute("SableDisabled") == true
+		local shown = disabled and (state.DisabledText or state.Text) or state.Text
+		if not shown or shown == "" then
+			return
+		end
+
+		hovering = true
+		tooltipLabel.Text = shown
+		tooltipFrame.Visible = true
+
+		moveConnection = self.RenderStepped:Connect(function()
+			if not hovering or self.Unloaded then
+				return
+			end
+			if not guiObject.Parent or not Util.MouseOver(guiObject) then
+				hide()
+				return
+			end
+
+			local mouse = Util.MousePosition()
+			local size = tooltipFrame.AbsoluteSize
+			local viewport = self.TooltipHolder.AbsoluteSize
+
+			local x = Util.Clamp(mouse.X + 14, 0, math.max(0, viewport.X - size.X - 2))
+			local y = Util.Clamp(mouse.Y + 16, 0, math.max(0, viewport.Y - size.Y - 2))
+			tooltipFrame.Position = UDim2.fromOffset(x, y)
+		end)
+	end))
+
+	self:GiveSignal(guiObject.MouseLeave:Connect(hide))
+	self:OnUnload(hide)
+
+	return function(newText, newDisabledText)
+		state.Text = newText
+		state.DisabledText = newDisabledText
+	end
+end
+
+--==============================================================
+-- visibility
+--==============================================================
+
+function Library:SetOpen(open)
+	if self.Unloaded then
+		return
+	end
+
+	self.Toggled = open and true or false
+	self:ClosePopup()
+
+	for _, window in self.Windows do
+		window:SetVisible(self.Toggled)
+	end
+
+	self.MenuToggled:Fire(self.Toggled)
+end
+
+function Library:Toggle()
+	self:SetOpen(not self.Toggled)
+end
+
+function Library:SetMenuKeybind(name)
+	if type(name) == "string" and name ~= "" then
+		self.MenuKeybind = name
+	end
+end
+
+Library:GiveSignal(Library.InputBegan:Connect(function(input, gameProcessed)
+	if Library.Unloaded or Library.CapturingInput then
+		return
+	end
+	if gameProcessed then
+		return
+	end
+	if UserInputService:GetFocusedTextBox() then
+		return
+	end
+	if Util.InputMatches(input, Library.MenuKeybind) then
+		Library:Toggle()
+	end
+end))
+
+--==============================================================
+-- assembly
+--==============================================================
+
+require("Window").Install(Library)
+require("Overlays").Install(Library)
+
+Library.ThemeManager = require("addons/ThemeManager")
+Library.SaveManager = require("addons/SaveManager")
+Library.ThemeManager:SetLibrary(Library)
+Library.SaveManager:SetLibrary(Library)
+
+if getgenv then
+	local env = getgenv()
+	env.Sable = Library
+	env.Toggles = Library.Toggles
+	env.Options = Library.Options
+end
+
+return Library
+end
+
+return require("init")
