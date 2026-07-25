@@ -101,8 +101,20 @@ if (-not $SkipBuild) {
     }
 }
 
+$exampleFailed = $false
+if (-not $SkipBuild) {
+    Write-Host "`n== example hub ==" -ForegroundColor Cyan
+    $exOut = & python (Join-Path $root 'tools\run_example.py') 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        $exampleFailed = $true
+        Write-Host $exOut.Trim() -ForegroundColor Yellow
+    } else {
+        ($exOut.Trim() -split "`n") | ForEach-Object { Write-Host "  $_" -ForegroundColor Green }
+    }
+}
+
 Write-Host ""
-if ($syntaxFailed -eq 0 -and $srcIssues.Count -eq 0 -and $bundleIssues.Count -eq 0 -and -not $smokeFailed) {
+if ($syntaxFailed -eq 0 -and $srcIssues.Count -eq 0 -and $bundleIssues.Count -eq 0 -and -not $smokeFailed -and -not $exampleFailed) {
     Write-Host "ALL CLEAN" -ForegroundColor Green
     exit 0
 }
