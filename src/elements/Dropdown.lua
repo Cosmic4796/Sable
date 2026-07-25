@@ -196,8 +196,11 @@ function Dropdown.New(Library, container, index, options)
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		ScrollBarThickness = Sizes.ScrollBar,
-		-- Empty image: the stock scrollbar texture has rounded caps.
-		ScrollBarImage = "",
+		-- The stock scrollbar has rounded caps. Pinning both end images to the
+		-- middle slice squares it off. (There is no "ScrollBarImage" property --
+		-- the caps are TopImage/BottomImage.)
+		TopImage = "rbxasset://textures/ui/Scroll/scroll-middle.png",
+		BottomImage = "rbxasset://textures/ui/Scroll/scroll-middle.png",
 		ScrollBarImageTransparency = 0,
 		VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
 		Theme = { ScrollBarImageColor3 = "Outline" },

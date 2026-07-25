@@ -33,7 +33,9 @@ def main() -> int:
         print("dist/Sable.lua missing - run tools/build.py first", file=sys.stderr)
         return 2
 
-    mock = (TOOLS / "mock_roblox.luau").read_text(encoding="utf-8")
+    # Generated property whitelist goes first; the mock reads it as a global.
+    api = (TOOLS / "mock_api.luau").read_text(encoding="utf-8")
+    mock = api + "\n" + (TOOLS / "mock_roblox.luau").read_text(encoding="utf-8")
     bundle = BUNDLE.read_text(encoding="utf-8")
     test = (TOOLS / "smoke_test.luau").read_text(encoding="utf-8")
 

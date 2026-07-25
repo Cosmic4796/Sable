@@ -31,6 +31,21 @@ local drain = __drainDeferred
 -- construction
 --==============================================================
 
+-- Meta-checks on the harness itself. A mock that quietly stops validating
+-- turns every later assertion into a false pass -- which is exactly how
+-- `ScrollBarImage = ""` reached a real executor. Verify the net exists before
+-- trusting anything it catches.
+check("MOCK_API loaded", type(MOCK_API) == "table" and MOCK_API.ScrollingFrame ~= nil)
+check("mock REJECTS an invalid property", not (pcall(function()
+	Instance.new("ScrollingFrame").ScrollBarImage = ""
+end)), "property validation is not active")
+check("mock ALLOWS a valid property", (pcall(function()
+	Instance.new("ScrollingFrame").ScrollBarImageColor3 = Color3.new(1, 1, 1)
+end)), "validation is rejecting real properties")
+check("mock REJECTS an invalid enum member", not (pcall(function()
+	return Enum.KeyCode.NotARealKey
+end)), "enum validation is not active")
+
 check("library loaded", type(Library) == "table")
 check("version present", type(Library.Version) == "string")
 check("ThemeManager attached", type(Library.ThemeManager) == "table")

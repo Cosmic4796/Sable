@@ -56,41 +56,41 @@
   },
   "elements/Dropdown": {
     "offset": 5752,
-    "lines": 587,
+    "lines": 590,
     "path": "src/elements/Dropdown.lua"
   },
   "elements/Input": {
-    "offset": 6342,
+    "offset": 6345,
     "lines": 250,
     "path": "src/elements/Input.lua"
   },
   "elements/KeyPicker": {
-    "offset": 6595,
+    "offset": 6598,
     "lines": 666,
     "path": "src/elements/KeyPicker.lua"
   },
   "elements/Label": {
-    "offset": 7264,
+    "offset": 7267,
     "lines": 116,
     "path": "src/elements/Label.lua"
   },
   "elements/Slider": {
-    "offset": 7383,
+    "offset": 7386,
     "lines": 407,
     "path": "src/elements/Slider.lua"
   },
   "elements/Toggle": {
-    "offset": 7793,
+    "offset": 7796,
     "lines": 222,
     "path": "src/elements/Toggle.lua"
   },
   "elements/init": {
-    "offset": 8018,
+    "offset": 8021,
     "lines": 85,
     "path": "src/elements/init.lua"
   },
   "init": {
-    "offset": 8106,
+    "offset": 8109,
     "lines": 687,
     "path": "src/init.lua"
   }

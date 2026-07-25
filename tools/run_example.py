@@ -72,7 +72,9 @@ def main() -> int:
             print(f"missing: {path}", file=sys.stderr)
             return 2
 
-    mock = (TOOLS / "mock_roblox.luau").read_text(encoding="utf-8")
+    # Generated property whitelist goes first; the mock reads it as a global.
+    api = (TOOLS / "mock_api.luau").read_text(encoding="utf-8")
+    mock = api + "\n" + (TOOLS / "mock_roblox.luau").read_text(encoding="utf-8")
     bundle = BUNDLE.read_text(encoding="utf-8")
     example = EXAMPLE.read_text(encoding="utf-8")
 
