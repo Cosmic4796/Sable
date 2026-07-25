@@ -1,30 +1,21 @@
 # Sable
 
+```
+┌╴                                             ╶┐
+
+   ███████  █████  ██████  ██      ███████
+   ██      ██   ██ ██   ██ ██      ██
+   ███████ ███████ ██████  ██      █████
+        ██ ██   ██ ██   ██ ██      ██
+   ███████ ██   ██ ██████  ███████ ███████
+
+└╴            T A C T I C A L   U I            ╶┘
+```
+
 A from-scratch UI library for Roblox script hubs. Linoria-shaped API, original
 code, and a visual identity that isn't a bootstrap theme: **tactical /
 instrument** — warm dark grey, one amber accent, hard 1px hairlines, zero corner
 radius, monospace throughout.
-
-```
-┌╴                                            ╶┐
-   S A B L E                            SYS 1.2
-└╴                                            ╶┘
-
-    M A I N      V I S U A L S      P L A Y E R
-    ▔▔▔▔▔▔▔
-
- ┌ AIMBOT ──────────┐   ┌ ESP ────────────────┐
- │                   │   │                     │
- │  ENABLED    [▪]   │   │  BOXES        [▪]   │
- │                   │   │                     │
- │  TEAM CHECK [ ]   │   │  NAMES        [ ]   │
- │                   │   │                     │
- │  FOV ▬▬▬▬▭▭ 120   │   │  TRACERS      [▪]   │
- │                   │   │                     │
- │  BONE  HEAD   ▾   │   │  FILL ▬▬▭▭▭    40   │
- │                   │   │                     │
- └───────────────────┘   └─────────────────────┘
-```
 
 ## Install
 
