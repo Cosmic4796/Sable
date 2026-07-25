@@ -5,6 +5,7 @@
 local TweenService = game:GetService("TweenService")
 local TextService = game:GetService("TextService")
 local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local CoreGui = game:GetService("CoreGui")
@@ -16,6 +17,7 @@ Util.Services = {
 	Tween = TweenService,
 	Text = TextService,
 	Input = UserInputService,
+	Gui = GuiService,
 	Players = Players,
 	Http = HttpService,
 	CoreGui = CoreGui,
@@ -568,13 +570,59 @@ end
 -- geometry
 --==============================================================
 
+--- Mirrors ScreenGui.IgnoreGuiInset for the gui Sable actually created; init
+--- assigns it from the ScreenGui itself the moment that exists. It decides
+--- where PLACED chrome has to start to clear the top bar. It deliberately does
+--- NOT enter the cursor conversion, which is the same in both modes -- see
+--- MouseInGuiSpace. Nothing but init may write it.
+Util.GuiInsetIgnored = false
+
+--- Where the top-bar-free area begins, measured in the offset space a holder's
+--- children are POSITIONED in -- not a cursor conversion.
+---
+--- A holder is a full-bleed child of the ScreenGui, so its local origin is the
+--- gui's own top-left: the true top of the screen when the gui ignores the
+--- inset, the point just under the top bar when it does not. Chrome that must
+--- clear the top bar starts here; chrome that may be parked over it ignores it.
+function Util.GuiInsetOffset()
+	if not Util.GuiInsetIgnored then
+		return Vector2.zero
+	end
+	-- GetGuiInset returns (topLeft, bottomRight); only the top-left offset
+	-- describes the band the top bar covers.
+	return (GuiService:GetGuiInset())
+end
+
+--- RAW cursor, exactly as UserInputService reports it: measured from the true
+--- top-left of the screen, top bar INCLUDED, whatever the ScreenGui does.
+---
+--- Legitimate for DELTAS ONLY -- drag and resize offsets, where a constant
+--- inset cancels in the subtraction. Comparing this against an AbsolutePosition
+--- is a bug in both inset modes; use MouseInGuiSpace.
 function Util.MousePosition()
 	return UserInputService:GetMouseLocation()
 end
 
---- Sable's ScreenGui uses IgnoreGuiInset = false, which puts AbsolutePosition
---- in the same space GetMouseLocation reports. Do NOT add inset math here --
---- it is only needed when the ScreenGui ignores the inset.
+--- Cursor in the SAME space as GuiObject.AbsolutePosition. Every hit test and
+--- every comparison against an AbsolutePosition must use this one.
+---
+--- The two spaces are one inset apart in BOTH modes, so the conversion is
+--- unconditional. AbsolutePosition is always measured from just under the top
+--- bar and IgnoreGuiInset does not move that origin -- it only lets the gui
+--- render above it, which is why a frame at the very top of the screen inside
+--- an inset-ignoring gui reports a NEGATIVE AbsolutePosition.Y. The cursor is
+--- measured from the true top-left, so it always reads one inset higher and
+--- always has that inset taken back off.
+---
+--- Skip the conversion and nothing errors: every hit test just reacts one inset
+--- BELOW the real cursor, so the user has to aim above the control.
+function Util.MouseInGuiSpace()
+	return UserInputService:GetMouseLocation() - (GuiService:GetGuiInset())
+end
+
+--- Is the cursor inside `guiObject`, optionally grown by `expand` pixels?
+--- The comparison happens in AbsolutePosition space, which is why the cursor
+--- goes through MouseInGuiSpace rather than being read raw.
 function Util.MouseOver(guiObject, expand)
 	if not guiObject or not guiObject.Visible then
 		return false
@@ -582,7 +630,7 @@ function Util.MouseOver(guiObject, expand)
 
 	expand = expand or 0
 
-	local mouse = UserInputService:GetMouseLocation()
+	local mouse = Util.MouseInGuiSpace()
 	local x, y = mouse.X, mouse.Y
 
 	local pos = guiObject.AbsolutePosition

@@ -145,9 +145,19 @@ function Overlays.Install(Library)
 	-- Where each panel starts, in HudHolder pixels. The keybind list sits one
 	-- HUD gap under a watermark of the standard height, which is exactly where
 	-- the old shared list layout put it, so a first run looks unchanged.
+	--
+	-- Measured from the top-bar-free area, not from the top of the holder: the
+	-- gui ignores the inset, so the holder now extends up BEHIND the top bar and
+	-- a bare margin would drop the watermark straight onto Roblox's own menu
+	-- button. Parking it up there stays perfectly legal -- it is a drag away --
+	-- it is just not where the HUD starts life.
+	local safe = Util.GuiInsetOffset()
 	local hudDefaults = {
-		Watermark = { X = HUD_MARGIN, Y = HUD_MARGIN },
-		KeybindList = { X = HUD_MARGIN, Y = HUD_MARGIN + WATERMARK_HEIGHT + HUD_GAP },
+		Watermark = { X = HUD_MARGIN + safe.X, Y = HUD_MARGIN + safe.Y },
+		KeybindList = {
+			X = HUD_MARGIN + safe.X,
+			Y = HUD_MARGIN + safe.Y + WATERMARK_HEIGHT + HUD_GAP,
+		},
 	}
 
 	-- Live positions as plain numbers, which is also the saved form: HttpService
@@ -178,7 +188,10 @@ function Overlays.Install(Library)
 		return type(value) == "number" and value == value and value > -math.huge and value < math.huge
 	end
 
-	--- Keeps a panel wholly inside HudHolder, allowing for its own size.
+	--- Keeps a panel wholly inside HudHolder, allowing for its own size. The
+	--- ScreenGui ignores the top bar inset, so HudHolder covers the whole screen
+	--- and 0 is the true top edge: a panel may be parked over the top bar, and
+	--- still cannot leave the screen in any direction.
 	local function clampToViewport(frame, x, y)
 		local viewport = Library.HudHolder.AbsoluteSize
 		-- Before the first frame the holder has no measured size; clamping
@@ -282,6 +295,9 @@ function Overlays.Install(Library)
 			end
 
 			dragPanel = panel
+			-- Raw cursor on purpose: the gesture is tracked as a delta from
+			-- here, and a constant gui inset cancels in that subtraction. The
+			-- panel's own position never comes from a cursor reading.
 			dragOrigin = Util.MousePosition()
 			dragStartX, dragStartY = hudLayout[key].X, hudLayout[key].Y
 		end))
@@ -324,6 +340,7 @@ function Overlays.Install(Library)
 			return
 		end
 
+		-- Pure delta again: both readings are raw, so the inset cancels.
 		local delta = Util.MousePosition() - dragOrigin
 		local entry = hudLayout[dragPanel.Key]
 		entry.WantX = dragStartX + delta.X
@@ -758,6 +775,16 @@ function Overlays.Install(Library)
 
 	local notifications = {}
 
+	--- Top of the notification stack, in NotificationHolder pixels. The gui
+	--- ignores the top bar inset, so the holder's own origin is the true top of
+	--- the screen and a bare margin would slide the first notification in behind
+	--- Roblox's top bar. A notification is never dragged, unlike a HUD panel, so
+	--- clearing the bar is not a default it can move away from -- it is the only
+	--- place it may sit.
+	local function stackTop()
+		return NOTIFY_MARGIN + Util.GuiInsetOffset().Y
+	end
+
 	--- Off-screen position is a full width past the edge, so the slide reads as
 	--- the panel entering from outside the viewport rather than fading in.
 	local function slotPosition(note, shown)
@@ -773,7 +800,7 @@ function Overlays.Install(Library)
 	--- Re-stacks every live notification from the top. Called after any removal
 	--- so the survivors close the gap instead of leaving a hole.
 	local function reflow()
-		local y = NOTIFY_MARGIN
+		local y = stackTop()
 
 		for _, note in notifications do
 			if note.Y ~= y then
@@ -859,7 +886,7 @@ function Overlays.Install(Library)
 		local height =
 			math.max(NOTIFY_PAD_Y * 2 + titleHeight + innerGap + bodyHeight, NOTIFY_MIN_HEIGHT)
 
-		local y = NOTIFY_MARGIN
+		local y = stackTop()
 		for _, existing in notifications do
 			y += existing.Height + NOTIFY_GAP
 		end
@@ -1376,6 +1403,7 @@ __modules["Util"] = function()
 local TweenService = game:GetService("TweenService")
 local TextService = game:GetService("TextService")
 local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local CoreGui = game:GetService("CoreGui")
@@ -1387,6 +1415,7 @@ Util.Services = {
 	Tween = TweenService,
 	Text = TextService,
 	Input = UserInputService,
+	Gui = GuiService,
 	Players = Players,
 	Http = HttpService,
 	CoreGui = CoreGui,
@@ -1939,13 +1968,59 @@ end
 -- geometry
 --==============================================================
 
+--- Mirrors ScreenGui.IgnoreGuiInset for the gui Sable actually created; init
+--- assigns it from the ScreenGui itself the moment that exists. It decides
+--- where PLACED chrome has to start to clear the top bar. It deliberately does
+--- NOT enter the cursor conversion, which is the same in both modes -- see
+--- MouseInGuiSpace. Nothing but init may write it.
+Util.GuiInsetIgnored = false
+
+--- Where the top-bar-free area begins, measured in the offset space a holder's
+--- children are POSITIONED in -- not a cursor conversion.
+---
+--- A holder is a full-bleed child of the ScreenGui, so its local origin is the
+--- gui's own top-left: the true top of the screen when the gui ignores the
+--- inset, the point just under the top bar when it does not. Chrome that must
+--- clear the top bar starts here; chrome that may be parked over it ignores it.
+function Util.GuiInsetOffset()
+	if not Util.GuiInsetIgnored then
+		return Vector2.zero
+	end
+	-- GetGuiInset returns (topLeft, bottomRight); only the top-left offset
+	-- describes the band the top bar covers.
+	return (GuiService:GetGuiInset())
+end
+
+--- RAW cursor, exactly as UserInputService reports it: measured from the true
+--- top-left of the screen, top bar INCLUDED, whatever the ScreenGui does.
+---
+--- Legitimate for DELTAS ONLY -- drag and resize offsets, where a constant
+--- inset cancels in the subtraction. Comparing this against an AbsolutePosition
+--- is a bug in both inset modes; use MouseInGuiSpace.
 function Util.MousePosition()
 	return UserInputService:GetMouseLocation()
 end
 
---- Sable's ScreenGui uses IgnoreGuiInset = false, which puts AbsolutePosition
---- in the same space GetMouseLocation reports. Do NOT add inset math here --
---- it is only needed when the ScreenGui ignores the inset.
+--- Cursor in the SAME space as GuiObject.AbsolutePosition. Every hit test and
+--- every comparison against an AbsolutePosition must use this one.
+---
+--- The two spaces are one inset apart in BOTH modes, so the conversion is
+--- unconditional. AbsolutePosition is always measured from just under the top
+--- bar and IgnoreGuiInset does not move that origin -- it only lets the gui
+--- render above it, which is why a frame at the very top of the screen inside
+--- an inset-ignoring gui reports a NEGATIVE AbsolutePosition.Y. The cursor is
+--- measured from the true top-left, so it always reads one inset higher and
+--- always has that inset taken back off.
+---
+--- Skip the conversion and nothing errors: every hit test just reacts one inset
+--- BELOW the real cursor, so the user has to aim above the control.
+function Util.MouseInGuiSpace()
+	return UserInputService:GetMouseLocation() - (GuiService:GetGuiInset())
+end
+
+--- Is the cursor inside `guiObject`, optionally grown by `expand` pixels?
+--- The comparison happens in AbsolutePosition space, which is why the cursor
+--- goes through MouseInGuiSpace rather than being read raw.
 function Util.MouseOver(guiObject, expand)
 	if not guiObject or not guiObject.Visible then
 		return false
@@ -1953,7 +2028,7 @@ function Util.MouseOver(guiObject, expand)
 
 	expand = expand or 0
 
-	local mouse = UserInputService:GetMouseLocation()
+	local mouse = Util.MouseInGuiSpace()
 	local x, y = mouse.X, mouse.Y
 
 	local pos = guiObject.AbsolutePosition
@@ -3184,6 +3259,9 @@ function Window.Install(Library)
 					return
 				end
 				resizing = true
+				-- Raw cursor: the grip works purely off the delta below, where
+				-- a constant gui inset cancels. Nothing here is compared to an
+				-- AbsolutePosition, so there is nothing to convert.
 				startMouse = Util.MousePosition()
 				startSize = root.AbsoluteSize
 				Library:ClosePopup()
@@ -5545,10 +5623,13 @@ local function build(Library, container, host, index, options)
 	end
 
 	--- Fraction of the way across (or down) a frame the cursor currently is.
+	--- The cursor is taken in AbsolutePosition space -- the SV square, the hue
+	--- bar and the alpha bar are all measured off their own rectangles, so a raw
+	--- reading would shift every picked colour by the gui inset.
 	local function ratio(frame, horizontal)
 		local origin = frame.AbsolutePosition
 		local size = frame.AbsoluteSize
-		local mouse = Util.MousePosition()
+		local mouse = Util.MouseInGuiSpace()
 
 		if horizontal then
 			if size.X <= 0 then
@@ -8067,7 +8148,9 @@ function Slider.New(Library, container, index, options)
 			return
 		end
 
-		local alpha = Util.Clamp((Util.MousePosition().X - trough.AbsolutePosition.X) / width, 0, 1)
+		-- Measured against the trough's AbsolutePosition, so the cursor has to be
+		-- in that space: a raw reading drags the value by the gui inset.
+		local alpha = Util.Clamp((Util.MouseInGuiSpace().X - trough.AbsolutePosition.X) / width, 0, 1)
 		local low, high = bounds()
 		local value = normalize(low + alpha * (high - low))
 
@@ -8614,9 +8697,17 @@ end
 local screenGui = Util.Create("ScreenGui", {
 	Name = randomName(12),
 	DisplayOrder = 9999,
-	-- MUST stay false: it puts AbsolutePosition in the same coordinate space
-	-- as UserInputService:GetMouseLocation(), which every hit test relies on.
-	IgnoreGuiInset = false,
+	-- True so the gui spans the WHOLE screen, top bar included, and the menu
+	-- and the HUD can be parked anywhere on it.
+	--
+	-- It does NOT put the cursor and AbsolutePosition into one space, and never
+	-- did: AbsolutePosition is measured from under the top bar whatever this
+	-- says, while UserInputService:GetMouseLocation() is measured from the true
+	-- top-left. Every hit test converts through Util.MouseInGuiSpace() in both
+	-- modes; raw Util.MousePosition() is for drag deltas only. What this
+	-- property does move is a holder's local (0, 0), which is why chrome that
+	-- wants to clear the top bar offsets itself by Util.GuiInsetOffset().
+	IgnoreGuiInset = true,
 	ResetOnSpawn = false,
 	AutoLocalize = false,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -8625,6 +8716,11 @@ local screenGui = Util.Create("ScreenGui", {
 Util.ProtectGui(screenGui)
 screenGui.Parent = Util.GetGuiParent()
 Library.ScreenGui = screenGui
+
+-- One source of truth for where a holder's local origin sits, read back off the
+-- instance rather than assumed: flip the property above and default HUD
+-- placement follows it instead of quietly disagreeing with it.
+Util.GuiInsetIgnored = screenGui.IgnoreGuiInset == true
 
 --- Full-bleed transparent layer. ZIndex on the holder decides what stacks
 --- above what, because ZIndexBehavior is Sibling.
@@ -8861,8 +8957,16 @@ function Library:MakeDraggable(handle, target)
 			return
 		end
 		dragging = true
+		-- Raw cursor deliberately: only the DELTA below is ever used, and a
+		-- constant gui inset cancels in a subtraction.
 		startMouse = Util.MousePosition()
-		startPos = target.AbsolutePosition
+		-- Position is an offset inside the parent, so the grab point has to be
+		-- parent-relative too. The holder's own AbsolutePosition is NOT zero
+		-- while the gui ignores the inset -- it sits one inset ABOVE the origin
+		-- AbsolutePosition is measured from, so its Y is negative -- and this
+		-- subtraction is the whole reason a grab does not jump the window.
+		local holder = target.Parent
+		startPos = target.AbsolutePosition - (holder and holder.AbsolutePosition or Vector2.zero)
 		self:ClosePopup()
 	end))
 
@@ -8877,11 +8981,15 @@ function Library:MakeDraggable(handle, target)
 			return
 		end
 
+		-- Pure delta: unaffected by the gui inset, so both readings stay raw.
 		local delta = Util.MousePosition() - startMouse
 		local viewport = self.ScreenGui.AbsoluteSize
 		local size = target.AbsoluteSize
 
 		-- Keep at least a sliver on screen so a window can never be lost.
+		-- The gui ignores the inset, so y = 0 is now the true top of the screen
+		-- and a window may sit over the top bar -- that is the point of it. The
+		-- slivers still guarantee the title bar can be grabbed again.
 		local x = Util.Clamp(startPos.X + delta.X, -size.X + 48, viewport.X - 48)
 		local y = Util.Clamp(startPos.Y + delta.Y, 0, math.max(0, viewport.Y - 24))
 
@@ -8945,6 +9053,9 @@ function Library:OpenPopup(frame, anchor, options)
 	local height = options.Height or frame.AbsoluteSize.Y
 	local viewport = holder.AbsoluteSize
 
+	-- No cursor involved: one AbsolutePosition minus another is already the
+	-- offset inside the holder, in whichever space both of them are measured.
+	-- The gui inset cancels here, so there is nothing to convert.
 	local origin = anchor.AbsolutePosition - holder.AbsolutePosition
 	local x = origin.X
 	local y = origin.Y + anchor.AbsoluteSize.Y + gap
@@ -8956,6 +9067,8 @@ function Library:OpenPopup(frame, anchor, options)
 		end
 	end
 
+	-- The holder spans the whole screen now, top bar included, so a popup from a
+	-- window parked up there stays with its anchor instead of being shoved down.
 	x = Util.Clamp(x, 4, math.max(4, viewport.X - width - 4))
 	y = Util.Clamp(y, 4, math.max(4, viewport.Y - height - 4))
 
@@ -9060,9 +9173,13 @@ function Library:GiveTooltip(guiObject, text, disabledText)
 				return
 			end
 
-			local mouse = Util.MousePosition()
+			-- An absolute placement, not a delta: take the cursor in
+			-- AbsolutePosition space, then make it relative to the holder,
+			-- because Position is an offset inside it.
+			local holder = self.TooltipHolder
+			local mouse = Util.MouseInGuiSpace() - holder.AbsolutePosition
 			local size = tooltipFrame.AbsoluteSize
-			local viewport = self.TooltipHolder.AbsoluteSize
+			local viewport = holder.AbsoluteSize
 
 			local x = Util.Clamp(mouse.X + 14, 0, math.max(0, viewport.X - size.X - 2))
 			local y = Util.Clamp(mouse.Y + 16, 0, math.max(0, viewport.Y - size.Y - 2))

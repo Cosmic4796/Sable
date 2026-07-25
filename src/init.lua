@@ -156,9 +156,17 @@ end
 local screenGui = Util.Create("ScreenGui", {
 	Name = randomName(12),
 	DisplayOrder = 9999,
-	-- MUST stay false: it puts AbsolutePosition in the same coordinate space
-	-- as UserInputService:GetMouseLocation(), which every hit test relies on.
-	IgnoreGuiInset = false,
+	-- True so the gui spans the WHOLE screen, top bar included, and the menu
+	-- and the HUD can be parked anywhere on it.
+	--
+	-- It does NOT put the cursor and AbsolutePosition into one space, and never
+	-- did: AbsolutePosition is measured from under the top bar whatever this
+	-- says, while UserInputService:GetMouseLocation() is measured from the true
+	-- top-left. Every hit test converts through Util.MouseInGuiSpace() in both
+	-- modes; raw Util.MousePosition() is for drag deltas only. What this
+	-- property does move is a holder's local (0, 0), which is why chrome that
+	-- wants to clear the top bar offsets itself by Util.GuiInsetOffset().
+	IgnoreGuiInset = true,
 	ResetOnSpawn = false,
 	AutoLocalize = false,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -167,6 +175,11 @@ local screenGui = Util.Create("ScreenGui", {
 Util.ProtectGui(screenGui)
 screenGui.Parent = Util.GetGuiParent()
 Library.ScreenGui = screenGui
+
+-- One source of truth for where a holder's local origin sits, read back off the
+-- instance rather than assumed: flip the property above and default HUD
+-- placement follows it instead of quietly disagreeing with it.
+Util.GuiInsetIgnored = screenGui.IgnoreGuiInset == true
 
 --- Full-bleed transparent layer. ZIndex on the holder decides what stacks
 --- above what, because ZIndexBehavior is Sibling.
@@ -403,8 +416,16 @@ function Library:MakeDraggable(handle, target)
 			return
 		end
 		dragging = true
+		-- Raw cursor deliberately: only the DELTA below is ever used, and a
+		-- constant gui inset cancels in a subtraction.
 		startMouse = Util.MousePosition()
-		startPos = target.AbsolutePosition
+		-- Position is an offset inside the parent, so the grab point has to be
+		-- parent-relative too. The holder's own AbsolutePosition is NOT zero
+		-- while the gui ignores the inset -- it sits one inset ABOVE the origin
+		-- AbsolutePosition is measured from, so its Y is negative -- and this
+		-- subtraction is the whole reason a grab does not jump the window.
+		local holder = target.Parent
+		startPos = target.AbsolutePosition - (holder and holder.AbsolutePosition or Vector2.zero)
 		self:ClosePopup()
 	end))
 
@@ -419,11 +440,15 @@ function Library:MakeDraggable(handle, target)
 			return
 		end
 
+		-- Pure delta: unaffected by the gui inset, so both readings stay raw.
 		local delta = Util.MousePosition() - startMouse
 		local viewport = self.ScreenGui.AbsoluteSize
 		local size = target.AbsoluteSize
 
 		-- Keep at least a sliver on screen so a window can never be lost.
+		-- The gui ignores the inset, so y = 0 is now the true top of the screen
+		-- and a window may sit over the top bar -- that is the point of it. The
+		-- slivers still guarantee the title bar can be grabbed again.
 		local x = Util.Clamp(startPos.X + delta.X, -size.X + 48, viewport.X - 48)
 		local y = Util.Clamp(startPos.Y + delta.Y, 0, math.max(0, viewport.Y - 24))
 
@@ -487,6 +512,9 @@ function Library:OpenPopup(frame, anchor, options)
 	local height = options.Height or frame.AbsoluteSize.Y
 	local viewport = holder.AbsoluteSize
 
+	-- No cursor involved: one AbsolutePosition minus another is already the
+	-- offset inside the holder, in whichever space both of them are measured.
+	-- The gui inset cancels here, so there is nothing to convert.
 	local origin = anchor.AbsolutePosition - holder.AbsolutePosition
 	local x = origin.X
 	local y = origin.Y + anchor.AbsoluteSize.Y + gap
@@ -498,6 +526,8 @@ function Library:OpenPopup(frame, anchor, options)
 		end
 	end
 
+	-- The holder spans the whole screen now, top bar included, so a popup from a
+	-- window parked up there stays with its anchor instead of being shoved down.
 	x = Util.Clamp(x, 4, math.max(4, viewport.X - width - 4))
 	y = Util.Clamp(y, 4, math.max(4, viewport.Y - height - 4))
 
@@ -602,9 +632,13 @@ function Library:GiveTooltip(guiObject, text, disabledText)
 				return
 			end
 
-			local mouse = Util.MousePosition()
+			-- An absolute placement, not a delta: take the cursor in
+			-- AbsolutePosition space, then make it relative to the holder,
+			-- because Position is an offset inside it.
+			local holder = self.TooltipHolder
+			local mouse = Util.MouseInGuiSpace() - holder.AbsolutePosition
 			local size = tooltipFrame.AbsoluteSize
-			local viewport = self.TooltipHolder.AbsoluteSize
+			local viewport = holder.AbsoluteSize
 
 			local x = Util.Clamp(mouse.X + 14, 0, math.max(0, viewport.X - size.X - 2))
 			local y = Util.Clamp(mouse.Y + 16, 0, math.max(0, viewport.Y - size.Y - 2))

@@ -229,10 +229,13 @@ local function build(Library, container, host, index, options)
 	end
 
 	--- Fraction of the way across (or down) a frame the cursor currently is.
+	--- The cursor is taken in AbsolutePosition space -- the SV square, the hue
+	--- bar and the alpha bar are all measured off their own rectangles, so a raw
+	--- reading would shift every picked colour by the gui inset.
 	local function ratio(frame, horizontal)
 		local origin = frame.AbsolutePosition
 		local size = frame.AbsoluteSize
-		local mouse = Util.MousePosition()
+		local mouse = Util.MouseInGuiSpace()
 
 		if horizontal then
 			if size.X <= 0 then

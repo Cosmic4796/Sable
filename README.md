@@ -300,9 +300,24 @@ examples/example.lua      full hub exercising every element
 - The ScreenGui takes a randomised name and is parented via `gethui()` when the
   executor provides it, falling back to `CoreGui` then `PlayerGui`, and is run
   through `syn.protect_gui` / `protect_gui` when available.
-- `IgnoreGuiInset` is deliberately `false`: it puts `AbsolutePosition` in the
-  same coordinate space as `UserInputService:GetMouseLocation()`, which every
-  hit test depends on. Do not change it.
+- `AbsolutePosition` and `UserInputService:GetMouseLocation()` are **not** in the
+  same space, and no ScreenGui property makes them so: `AbsolutePosition` is
+  measured from just under the top bar, the cursor from the true top-left of the
+  screen. So **every hit test reads the cursor through `Util.MouseInGuiSpace()`**
+  (`GetMouseLocation() - GetGuiInset()`), never `Util.MousePosition()`. Raw
+  `Util.MousePosition()` is for drag deltas only, where a constant offset
+  cancels. Mixing the two errors nowhere — it just makes every hover and click
+  react one inset away from where the user aimed.
+- `IgnoreGuiInset` is `true`, so the gui spans the whole screen: a holder's local
+  `(0, 0)` is the true top of the screen, and an element inside it reports a
+  *negative* `AbsolutePosition.Y` up there. Anything that turns an
+  `AbsolutePosition` into a `Position` (the drag grab point, popup placement,
+  tooltip follow) subtracts the holder's own `AbsolutePosition` rather than
+  assuming it is zero.
+- Windows, popups and HUD panels may all be **parked** over the top bar; the HUD
+  and the notification stack still **start** below it
+  (`Util.GuiInsetOffset()`), since that corner is where Roblox draws its own
+  menu button. Nothing can be dragged off screen.
 - Every connection the library makes is tracked and torn down by
   `Library:Unload()`.
 - **Callbacks do not fire on construction.** Building a menu would otherwise run

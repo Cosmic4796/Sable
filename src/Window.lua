@@ -1022,6 +1022,9 @@ function Window.Install(Library)
 					return
 				end
 				resizing = true
+				-- Raw cursor: the grip works purely off the delta below, where
+				-- a constant gui inset cancels. Nothing here is compared to an
+				-- AbsolutePosition, so there is nothing to convert.
 				startMouse = Util.MousePosition()
 				startSize = root.AbsoluteSize
 				Library:ClosePopup()

@@ -288,6 +288,22 @@ step("Notify table", function()
 	Library:Notify({ Title = "Title", Description = "Body", Time = 2, Risk = true })
 	Library:Notify({ Title = "Good", Description = "Body", Time = 2, Good = true })
 end)
+step("the notification stack clears the top bar", function()
+	-- The holder's local origin is the true top of the screen while the gui
+	-- ignores the inset, so a bare margin slides the first notification in
+	-- behind Roblox's own top bar -- and unlike a HUD panel, a notification
+	-- cannot be dragged out from under it.
+	local first = Library.NotificationHolder:GetChildren()[1]
+	check("a notification was built", first ~= nil)
+	if not first then
+		return
+	end
+	check(
+		"the first notification starts below the top bar",
+		first.Position.Y.Offset >= game:GetService("GuiService"):GetGuiInset().Y,
+		first.Position.Y.Offset
+	)
+end)
 step("watermark", function()
 	Library:SetWatermark("SABLE")
 	Library:SetWatermarkVisibility(true)
@@ -359,6 +375,14 @@ end)
 local hudDefaults = Library:GetHudLayout()
 check("layout is plain numbers", type(hudDefaults.Watermark) == "table" and type(hudDefaults.Watermark.X) == "number")
 check("watermark defaults to the top-left margin", hudDefaults.Watermark.X > 0 and hudDefaults.Watermark.Y > 0)
+-- The gui ignores the top bar inset, so HudHolder reaches up behind the top bar.
+-- Dragging a panel up there is the point of that; STARTING there is not -- the
+-- default watermark would sit on Roblox's own menu button.
+check(
+	"the hud starts clear of the top bar",
+	hudDefaults.Watermark.Y >= game:GetService("GuiService"):GetGuiInset().Y,
+	hudDefaults.Watermark.Y
+)
 check(
 	"keybind list defaults directly below the watermark",
 	hudDefaults.KeybindList.X == hudDefaults.Watermark.X and hudDefaults.KeybindList.Y > hudDefaults.Watermark.Y,
@@ -471,16 +495,13 @@ step("dragging a panel moves it and saves on release", function()
 	check("handle is live while the menu is open", handle.Visible == true)
 	check("handle covers the panel", handle.Size.X.Offset == MARK_W and handle.Size.Y.Offset == MARK_H)
 
-	local mouse = Vector2.new(500, 500)
-	__UserInputService.GetMouseLocation = function()
-		return mouse
-	end
+	__setMouse(500, 500)
 
 	local press = Instance.new("InputObject")
 	press.UserInputType = Enum.UserInputType.MouseButton1
 	handle.InputBegan:Fire(press)
 
-	mouse = Vector2.new(560, 540)
+	__setMouse(560, 540)
 	local move = Instance.new("InputObject")
 	move.UserInputType = Enum.UserInputType.MouseMovement
 	__UserInputService.InputChanged:Fire(move, false)
@@ -505,13 +526,11 @@ step("dragging a panel moves it and saves on release", function()
 	check("drag end saved the layout", type(saved) == "table" and saved.Watermark.X == dragged.Watermark.X)
 
 	-- Released: further movement must not drag the panel any more.
-	mouse = Vector2.new(900, 900)
+	__setMouse(900, 900)
 	__UserInputService.InputChanged:Fire(move, false)
 	check("release ended the drag", Library:GetHudLayout().Watermark.X == dragged.Watermark.X)
 
-	__UserInputService.GetMouseLocation = function()
-		return Vector2.new(400, 300)
-	end
+	__setMouse(400, 300)
 end)
 
 step("dragging is impossible while the menu is closed", function()
@@ -526,16 +545,13 @@ step("dragging is impossible while the menu is closed", function()
 
 	-- The cursor really does move between press and release; only the closed
 	-- menu should be stopping this.
-	local mouse = Vector2.new(100, 100)
-	__UserInputService.GetMouseLocation = function()
-		return mouse
-	end
+	__setMouse(100, 100)
 
 	local press = Instance.new("InputObject")
 	press.UserInputType = Enum.UserInputType.MouseButton1
 	handle.InputBegan:Fire(press)
 
-	mouse = Vector2.new(300, 400)
+	__setMouse(300, 400)
 	local move = Instance.new("InputObject")
 	move.UserInputType = Enum.UserInputType.MouseMovement
 	__UserInputService.InputChanged:Fire(move, false)
@@ -543,9 +559,7 @@ step("dragging is impossible while the menu is closed", function()
 
 	check("closed menu refuses the drag", Library:GetHudLayout().KeybindList.X == before, Library:GetHudLayout().KeybindList.X)
 
-	__UserInputService.GetMouseLocation = function()
-		return Vector2.new(400, 300)
-	end
+	__setMouse(400, 300)
 	Library:SetOpen(true)
 end)
 
@@ -650,6 +664,141 @@ step("menu hotkey works when set with a non-canonical name", function()
 	check("non-canonical keybind still matches", Library.Toggled ~= before, "hotkey did nothing")
 	Library:SetMenuKeybind("INS")
 	Library:SetOpen(true)
+end)
+
+--==============================================================
+-- cursor space vs AbsolutePosition space
+--==============================================================
+
+-- AbsolutePosition is measured from just under the top bar; GetMouseLocation is
+-- measured from the true top-left of the screen. They are one inset apart, and
+-- IgnoreGuiInset does NOT close the gap -- it only lets the gui draw above the
+-- bar, which is why an inset-ignoring gui reports negative AbsolutePosition.Y at
+-- the top of the screen. A missing (or backwards) conversion errors nowhere: it
+-- just makes every hit test react an inset away from the real cursor, so the
+-- user has to aim off the control. It has to be asserted head on.
+
+local inset = game:GetService("GuiService"):GetGuiInset()
+check("harness reports a non-zero gui inset", inset.Y > 0, inset.Y)
+check("ScreenGui ignores the gui inset", Library.ScreenGui.IgnoreGuiInset == true)
+check("Util follows the ScreenGui", Util.GuiInsetIgnored == true)
+check("MouseInGuiSpace exists", type(Util.MouseInGuiSpace) == "function")
+
+-- Rectangle: x 100..300, y 100..150, in AbsolutePosition space.
+local probe = Instance.new("Frame")
+probe.AbsolutePosition = Vector2.new(100, 100)
+probe.AbsoluteSize = Vector2.new(200, 50)
+
+--- Puts the RAW cursor where the library should SEE it at (x, y) in
+--- AbsolutePosition space. Written out rather than derived from the library's
+--- own helper, so a helper that changed direction could not drag the
+--- expectations along with it.
+local function cursorAtGuiPoint(x, y)
+	__setMouse(x + inset.X, y + inset.Y)
+end
+
+local function overAt(x, y, expand)
+	cursorAtGuiPoint(x, y)
+	return Util.MouseOver(probe, expand)
+end
+
+-- Both modes, because the conversion is unconditional: a hit test must not
+-- change its answer when the placement flag flips. Reintroduce a dependency on
+-- Util.GuiInsetIgnored here and one of these two passes fails.
+for _, ignored in { true, false } do
+	local mode = ignored and "inset ignored" or "inset honoured"
+	Util.GuiInsetIgnored = ignored
+
+	check(mode .. ": centre is inside", overAt(200, 125) == true)
+	check(mode .. ": top-left corner is inside", overAt(100, 100) == true)
+	check(mode .. ": bottom-right corner is inside", overAt(300, 150) == true)
+	check(mode .. ": a pixel above is outside", overAt(200, 99) == false)
+	check(mode .. ": a pixel below is outside", overAt(200, 151) == false)
+	check(mode .. ": a pixel left is outside", overAt(99, 125) == false)
+	check(mode .. ": a pixel right is outside", overAt(301, 125) == false)
+	check(mode .. ": expand grows the rectangle", overAt(200, 151, 4) == true)
+	check(mode .. ": expand is not unbounded", overAt(200, 200, 4) == false)
+end
+
+Util.GuiInsetIgnored = Library.ScreenGui.IgnoreGuiInset == true
+
+-- The value checks, stated in raw coordinates so they pin the DIRECTION. Delete
+-- the conversion, or flip its sign, and these are what report it.
+__setMouse(200, 125 + inset.Y) -- raw: below the frame. converted: dead centre.
+check(
+	"a converted cursor lands inside",
+	Util.MouseOver(probe) == true,
+	"raw cursor coordinates are being compared against AbsolutePosition"
+)
+check("MouseInGuiSpace takes the inset off", Util.MouseInGuiSpace().Y == 125, Util.MouseInGuiSpace().Y)
+check("MousePosition stays raw", Util.MousePosition().Y == 125 + inset.Y, Util.MousePosition().Y)
+
+__setMouse(200, 125) -- raw: dead centre. converted: above the frame.
+check(
+	"an unconverted cursor lands outside",
+	Util.MouseOver(probe) == false,
+	"the gui inset is not being taken off the cursor"
+)
+
+__setMouse(200, 125 - inset.Y) -- the sign-flip case: converted, this is 2 insets off.
+check(
+	"an inverted conversion lands outside",
+	Util.MouseOver(probe) == false,
+	"the gui inset is being ADDED to the cursor instead of subtracted"
+)
+
+probe:Destroy()
+__setMouse(400, 300)
+
+-- A window's grab point. Position is holder-relative but AbsolutePosition is
+-- not, and while the gui ignores the inset the holder's own AbsolutePosition.Y
+-- is negative -- so a grab that forgets to subtract it snaps the window up by an
+-- inset before the cursor has moved a pixel.
+step("grabbing a window does not jump it", function()
+	local viewport = Library.ScreenGui.AbsoluteSize
+	Library.ScreenGui.AbsoluteSize = Vector2.new(1920, 1080)
+
+	local holder = Instance.new("Frame")
+	holder.AbsolutePosition = Vector2.new(0, -inset.Y)
+
+	local target = Instance.new("Frame")
+	target.Parent = holder
+	target.Position = UDim2.fromOffset(120, 200)
+	target.Size = UDim2.fromOffset(400, 300)
+	target.AbsoluteSize = Vector2.new(400, 300)
+	-- Sitting at holder-local (120, 200), i.e. one inset up in absolute terms.
+	target.AbsolutePosition = Vector2.new(120, 200 - inset.Y)
+
+	local handle = Instance.new("Frame")
+	Library:MakeDraggable(handle, target)
+
+	__setMouse(700, 700)
+	local press = Instance.new("InputObject")
+	press.UserInputType = Enum.UserInputType.MouseButton1
+	handle.InputBegan:Fire(press)
+
+	-- Not one pixel of movement: whatever comes out must be where it started.
+	local move = Instance.new("InputObject")
+	move.UserInputType = Enum.UserInputType.MouseMovement
+	__UserInputService.InputChanged:Fire(move, false)
+
+	check(
+		"a zero-distance drag leaves the window alone",
+		target.Position.Y.Offset == 200 and target.Position.X.Offset == 120,
+		("%d,%d"):format(target.Position.X.Offset, target.Position.Y.Offset)
+	)
+
+	__setMouse(760, 740)
+	__UserInputService.InputChanged:Fire(move, false)
+	check(
+		"the window follows the cursor one for one",
+		target.Position.X.Offset == 180 and target.Position.Y.Offset == 240,
+		("%d,%d"):format(target.Position.X.Offset, target.Position.Y.Offset)
+	)
+
+	__UserInputService.InputEnded:Fire(press, false)
+	Library.ScreenGui.AbsoluteSize = viewport
+	__setMouse(400, 300)
 end)
 
 --==============================================================

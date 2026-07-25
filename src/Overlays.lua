@@ -117,9 +117,19 @@ function Overlays.Install(Library)
 	-- Where each panel starts, in HudHolder pixels. The keybind list sits one
 	-- HUD gap under a watermark of the standard height, which is exactly where
 	-- the old shared list layout put it, so a first run looks unchanged.
+	--
+	-- Measured from the top-bar-free area, not from the top of the holder: the
+	-- gui ignores the inset, so the holder now extends up BEHIND the top bar and
+	-- a bare margin would drop the watermark straight onto Roblox's own menu
+	-- button. Parking it up there stays perfectly legal -- it is a drag away --
+	-- it is just not where the HUD starts life.
+	local safe = Util.GuiInsetOffset()
 	local hudDefaults = {
-		Watermark = { X = HUD_MARGIN, Y = HUD_MARGIN },
-		KeybindList = { X = HUD_MARGIN, Y = HUD_MARGIN + WATERMARK_HEIGHT + HUD_GAP },
+		Watermark = { X = HUD_MARGIN + safe.X, Y = HUD_MARGIN + safe.Y },
+		KeybindList = {
+			X = HUD_MARGIN + safe.X,
+			Y = HUD_MARGIN + safe.Y + WATERMARK_HEIGHT + HUD_GAP,
+		},
 	}
 
 	-- Live positions as plain numbers, which is also the saved form: HttpService
@@ -150,7 +160,10 @@ function Overlays.Install(Library)
 		return type(value) == "number" and value == value and value > -math.huge and value < math.huge
 	end
 
-	--- Keeps a panel wholly inside HudHolder, allowing for its own size.
+	--- Keeps a panel wholly inside HudHolder, allowing for its own size. The
+	--- ScreenGui ignores the top bar inset, so HudHolder covers the whole screen
+	--- and 0 is the true top edge: a panel may be parked over the top bar, and
+	--- still cannot leave the screen in any direction.
 	local function clampToViewport(frame, x, y)
 		local viewport = Library.HudHolder.AbsoluteSize
 		-- Before the first frame the holder has no measured size; clamping
@@ -254,6 +267,9 @@ function Overlays.Install(Library)
 			end
 
 			dragPanel = panel
+			-- Raw cursor on purpose: the gesture is tracked as a delta from
+			-- here, and a constant gui inset cancels in that subtraction. The
+			-- panel's own position never comes from a cursor reading.
 			dragOrigin = Util.MousePosition()
 			dragStartX, dragStartY = hudLayout[key].X, hudLayout[key].Y
 		end))
@@ -296,6 +312,7 @@ function Overlays.Install(Library)
 			return
 		end
 
+		-- Pure delta again: both readings are raw, so the inset cancels.
 		local delta = Util.MousePosition() - dragOrigin
 		local entry = hudLayout[dragPanel.Key]
 		entry.WantX = dragStartX + delta.X
@@ -730,6 +747,16 @@ function Overlays.Install(Library)
 
 	local notifications = {}
 
+	--- Top of the notification stack, in NotificationHolder pixels. The gui
+	--- ignores the top bar inset, so the holder's own origin is the true top of
+	--- the screen and a bare margin would slide the first notification in behind
+	--- Roblox's top bar. A notification is never dragged, unlike a HUD panel, so
+	--- clearing the bar is not a default it can move away from -- it is the only
+	--- place it may sit.
+	local function stackTop()
+		return NOTIFY_MARGIN + Util.GuiInsetOffset().Y
+	end
+
 	--- Off-screen position is a full width past the edge, so the slide reads as
 	--- the panel entering from outside the viewport rather than fading in.
 	local function slotPosition(note, shown)
@@ -745,7 +772,7 @@ function Overlays.Install(Library)
 	--- Re-stacks every live notification from the top. Called after any removal
 	--- so the survivors close the gap instead of leaving a hole.
 	local function reflow()
-		local y = NOTIFY_MARGIN
+		local y = stackTop()
 
 		for _, note in notifications do
 			if note.Y ~= y then
@@ -831,7 +858,7 @@ function Overlays.Install(Library)
 		local height =
 			math.max(NOTIFY_PAD_Y * 2 + titleHeight + innerGap + bodyHeight, NOTIFY_MIN_HEIGHT)
 
-		local y = NOTIFY_MARGIN
+		local y = stackTop()
 		for _, existing in notifications do
 			y += existing.Height + NOTIFY_GAP
 		end

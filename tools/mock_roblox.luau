@@ -788,6 +788,23 @@ function __drainDelayed()
 	end
 end
 
+-- The cursor is a variable, not a constant: hit-test maths cannot be exercised
+-- against a mouse that can never move, and the gui-inset conversion is exactly
+-- the kind of silent offset only a moving cursor can catch. Raw coordinates, in
+-- the space GetMouseLocation reports -- measured from the true top-left of the
+-- screen, so the top bar occupies the first inset rows of it.
+local mousePosition = Vector2.new(400, 300)
+
+--- Test hook: puts the cursor at (x, y), or at a Vector2 passed as x.
+function __setMouse(x, y)
+	mousePosition = typeof(x) == "Vector2" and x or Vector2.new(x, y)
+	return mousePosition
+end
+
+function __getMouse()
+	return mousePosition
+end
+
 local userInput = {
 	InputBegan = newSignal(),
 	InputEnded = newSignal(),
@@ -795,7 +812,7 @@ local userInput = {
 	TextBoxFocused = newSignal(),
 	TextBoxFocusReleased = newSignal(),
 	GetMouseLocation = function()
-		return Vector2.new(400, 300)
+		return mousePosition
 	end,
 	IsKeyDown = function()
 		return false
@@ -855,6 +872,9 @@ local services = {
 	RunService = runService,
 	CoreGui = coreGui,
 	GuiService = {
+		-- Deliberately NON-ZERO, and deliberately a two-value return like the
+		-- real one. A zero inset would let an unconverted cursor pass every hit
+		-- test in the suite while every real hover sat an inset off target.
 		GetGuiInset = function()
 			return Vector2.new(0, 36), Vector2.new(0, 0)
 		end,

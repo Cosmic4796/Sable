@@ -174,7 +174,8 @@ that acts on a bind must check it.
 `Falloff`, `Padding`, `ListLayout`, `Clamp`, `Lerp`, `Round`, `Alpha`,
 `FormatNumber`, `ToHex`, `FromHex`, `Shift`, `Mix`, `Letterspace`, `TextSize`,
 `Truncate`, `InputName`, `KeyCodeFromName`, `IsHeld`, `InputMatches`,
-`MousePosition`, `MouseOver`, `Tween`, `Find`, `Count`, `DeepCopy`,
+`MousePosition`, `MouseInGuiSpace`, `GuiInsetOffset`, `MouseOver`, `Tween`,
+`Find`, `Count`, `DeepCopy`,
 `SortedKeys`, `FS` (filesystem), `SetClipboard`, `ExecutorName`, `Global`.
 
 ---
@@ -431,6 +432,21 @@ so `SaveManager:IgnoreThemeSettings()` keeps them out of configs.
 - Every user callback goes through `Library:SafeCallback`.
 - Guard against `Library.Unloaded` inside `RenderStepped` handlers.
 - Never `wait()` or `spawn()`; use `task.wait` / `task.spawn` / `task.defer`.
+- `AbsolutePosition` is measured from just under the top bar while
+  `GetMouseLocation()` is measured from the true top-left of the screen, so the
+  two sit one `GuiService:GetGuiInset()` apart — in **both** inset modes.
+  `IgnoreGuiInset` moves what the gui covers, not that origin, which is why an
+  inset-ignoring gui reports a *negative* `AbsolutePosition.Y` at the top of the
+  screen. Compare a cursor against an `AbsolutePosition` only through
+  `Util.MouseInGuiSpace()`; raw `Util.MousePosition()` is for drag deltas, where
+  the constant offset cancels. Mixing them errors nowhere — it just makes every
+  hit test react one inset away from the cursor.
+- The ScreenGui sets `IgnoreGuiInset = true`, so a holder's local `(0, 0)` is
+  the true top of the screen and the menu and HUD panels can be **parked** over
+  the top bar. Chrome that must *start* clear of it — HUD defaults,
+  notifications — offsets itself by `Util.GuiInsetOffset()`. A grab point taken
+  from an `AbsolutePosition` must be made holder-relative first, since the
+  holder's own `AbsolutePosition` is no longer zero.
 - `Enum.KeyCode.Unknown` is missing from the bundled type definitions even
   though it exists at runtime — compare `keyCode.Name == "Unknown"` instead.
 

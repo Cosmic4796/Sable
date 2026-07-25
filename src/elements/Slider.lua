@@ -332,7 +332,9 @@ function Slider.New(Library, container, index, options)
 			return
 		end
 
-		local alpha = Util.Clamp((Util.MousePosition().X - trough.AbsolutePosition.X) / width, 0, 1)
+		-- Measured against the trough's AbsolutePosition, so the cursor has to be
+		-- in that space: a raw reading drags the value by the gui inset.
+		local alpha = Util.Clamp((Util.MouseInGuiSpace().X - trough.AbsolutePosition.X) / width, 0, 1)
 		local low, high = bounds()
 		local value = normalize(low + alpha * (high - low))
 
