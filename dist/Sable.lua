@@ -1193,6 +1193,11 @@ Theme.Sizes = {
 	PopupMaxItems = 9,
 
 	ScrollBar = 3,
+	-- The stock scrollbar is the last piece of default Roblox chrome left in the
+	-- design, so it is invisible at rest and never comes back further than this:
+	-- enough to read a position from, not enough to become furniture. The bar
+	-- keeps its thickness while hidden -- a zero-width bar has no drag target.
+	ScrollBarFaint = 0.5,
 }
 
 -- Monospace throughout. Mixing a proportional UI font in is the single fastest
@@ -1207,6 +1212,10 @@ Theme.Motion = {
 	Fast = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 	Slow = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 	Fade = 0.14,
+	-- Seconds a scrollbar stays up after the last scroll, once the cursor is no
+	-- longer over the column. Long enough to finish the gesture, short enough
+	-- that a still menu has no scrollbars in it at all.
+	ScrollBarIdle = 0.6,
 }
 
 --==============================================================
@@ -2701,15 +2710,16 @@ function Window.Install(Library)
 			CanvasSize = UDim2.fromOffset(0, 0),
 			ElasticBehavior = Enum.ElasticBehavior.Never,
 			Position = isLeft and UDim2.fromScale(0, 0) or UDim2.new(0.5, HalfGap, 0, 0),
-			ScrollBarImageTransparency = 0,
 			ScrollBarThickness = Sizes.ScrollBar,
 			ScrollingDirection = Enum.ScrollingDirection.Y,
 			Size = UDim2.new(0.5, -HalfGap, 1, 0),
 			TopImage = FLAT_SCROLL,
 			VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
-			Theme = { ScrollBarImageColor3 = "Outline" },
 			Parent = page,
 		})
+
+		-- Owns the bar's colour and transparency from here on.
+		Library:QuietScrollbar(column)
 
 		-- Side padding is a hairline wide so a groupbox's UIStroke, which draws
 		-- outside the frame, is not eaten by the ScrollingFrame's clipping.
@@ -6383,11 +6393,12 @@ function Dropdown.New(Library, container, index, options)
 		-- the caps are TopImage/BottomImage.)
 		TopImage = "rbxasset://textures/ui/Scroll/scroll-middle.png",
 		BottomImage = "rbxasset://textures/ui/Scroll/scroll-middle.png",
-		ScrollBarImageTransparency = 0,
 		VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
-		Theme = { ScrollBarImageColor3 = "Outline" },
 		Parent = popup,
 	})
+
+	-- Owns the bar's colour and transparency from here on.
+	Library:QuietScrollbar(element.List)
 
 	Util.ListLayout(element.List, 0)
 
@@ -8583,6 +8594,11 @@ Library.Unloaded = false
 --- Element label casing. Users write "Team check", Sable renders "TEAM CHECK".
 Library.UppercaseLabels = true
 
+--- Scrollbars are hidden until a column is actually being scrolled or hovered.
+--- Set this false BEFORE creating a window to keep a constant faint bar instead,
+--- for anyone who wants the affordance on screen at all times.
+Library.QuietScrollbars = true
+
 -- Canonical spelling, matching what Util.InputName reports for a real key
 -- press. Util.CanonicalName folds "INSERT"/"Insert" onto this too, but storing
 -- the canonical form keeps the keybind pill and a re-capture consistent.
@@ -8938,6 +8954,134 @@ function Library:BindHover(button, target, normalKey, hoverKey)
 	self:GiveSignal(button.MouseLeave:Connect(function()
 		apply(normalKey)
 	end))
+end
+
+--- Takes over a ScrollingFrame's scrollbar: transparent at rest, faint while
+--- the canvas is moving or the cursor is over it, gone again after
+--- Motion.ScrollBarIdle. Every ScrollingFrame in the library goes through here,
+--- so the feel lives in one place.
+---
+--- Only the bar's VISIBILITY changes -- the frame stays interactive and keeps
+--- its thickness, because a zero-thickness bar is also a zero-width drag
+--- target. When the content already fits, the bar never appears at all.
+function Library:QuietScrollbar(frame)
+	local faint = self.Sizes.ScrollBarFaint
+
+	self:AddToRegistry(frame, { ScrollBarImageColor3 = "Outline" })
+
+	if not self.QuietScrollbars then
+		frame.ScrollBarImageTransparency = faint
+		return frame
+	end
+
+	frame.ScrollBarImageTransparency = 1
+
+	local hovering = false
+	-- Bumped by everything that renews interest in the bar, so a fade-out
+	-- queued by an earlier scroll cannot fire after a later one.
+	local generation = 0
+
+	-- Only an axis that can actually SCROLL counts. A Y-only column whose canvas
+	-- is a few pixels wider than its window -- the vertical bar's own inset does
+	-- exactly that -- has nothing to drag, and a bar that cannot move is the
+	-- chrome this helper exists to remove.
+	local function overflows()
+		local window = frame.AbsoluteWindowSize
+		local canvas = frame.AbsoluteCanvasSize
+		local direction = frame.ScrollingDirection
+		if direction ~= Enum.ScrollingDirection.X and canvas.Y > window.Y then
+			return true
+		end
+		if direction ~= Enum.ScrollingDirection.Y and canvas.X > window.X then
+			return true
+		end
+		return false
+	end
+
+	--- MouseEnter/MouseLeave are driven by cursor MOVEMENT, so a frame that goes
+	--- out from under a STILL cursor -- a popup closing on the click that chose a
+	--- row, the menu toggling off -- never delivers a MouseLeave. Hover is the one
+	--- state that holds the bar up with NO fade queued, so a flag left standing
+	--- there pins the bar on screen for the rest of the session. The cursor is the
+	--- source of truth; the flag only says where it was last seen.
+	local function hovered()
+		if hovering and not (frame.Parent and Util.MouseOver(frame)) then
+			hovering = false
+		end
+		return hovering
+	end
+
+	local function fade(target, info)
+		if self.Unloaded then
+			return
+		end
+		self:Tween(frame, { ScrollBarImageTransparency = target }, info)
+	end
+
+	local function hide()
+		generation += 1
+		fade(1, self.Motion.Slow)
+	end
+
+	local function scheduleHide()
+		generation += 1
+		local token = generation
+		task.delay(self.Motion.ScrollBarIdle, function()
+			-- Runs long after the fact: the menu may have been unloaded and the
+			-- gui destroyed, and a newer scroll or a hover may own the bar now.
+			if self.Unloaded or token ~= generation or hovered() then
+				return
+			end
+			fade(1, self.Motion.Slow)
+		end)
+	end
+
+	--- `hold` keeps the bar up with no pending fade -- that is the hover state.
+	local function show(hold)
+		if not overflows() then
+			hide()
+			return
+		end
+		generation += 1
+		fade(faint, self.Motion.Fast)
+		if not hold then
+			scheduleHide()
+		end
+	end
+
+	self:GiveSignal(frame:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+		show(hovered())
+	end))
+
+	-- Groupboxes grow and shrink, so what overflows changes under the bar. A
+	-- column that no longer has anything to scroll must not keep one.
+	self:GiveSignal(frame:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(function()
+		if not overflows() then
+			hide()
+		elseif hovered() then
+			show(true)
+		elseif frame.ScrollBarImageTransparency < 1 then
+			-- Up with nothing holding it: the cursor left without a MouseLeave.
+			-- This is the beat that lets a stranded hover go.
+			scheduleHide()
+		end
+	end))
+
+	self:GiveSignal(frame.MouseEnter:Connect(function()
+		hovering = true
+		show(true)
+	end))
+
+	self:GiveSignal(frame.MouseLeave:Connect(function()
+		hovering = false
+		if overflows() then
+			scheduleHide()
+		else
+			hide()
+		end
+	end))
+
+	return frame
 end
 
 --==============================================================

@@ -201,11 +201,12 @@ function Dropdown.New(Library, container, index, options)
 		-- the caps are TopImage/BottomImage.)
 		TopImage = "rbxasset://textures/ui/Scroll/scroll-middle.png",
 		BottomImage = "rbxasset://textures/ui/Scroll/scroll-middle.png",
-		ScrollBarImageTransparency = 0,
 		VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
-		Theme = { ScrollBarImageColor3 = "Outline" },
 		Parent = popup,
 	})
+
+	-- Owns the bar's colour and transparency from here on.
+	Library:QuietScrollbar(element.List)
 
 	Util.ListLayout(element.List, 0)
 

@@ -278,6 +278,130 @@ end)
 check("registry stable across 50 state flips", #Library.Registry == before, ("%d -> %d"):format(before, #Library.Registry))
 
 --==============================================================
+-- quiet scrollbars
+--==============================================================
+
+-- The bar is stock Roblox chrome, so it is driven entirely by transparency:
+-- thickness must stay put (it is the drag target) and the frame must stay
+-- scrollable. Every assertion below reads the property the helper owns, so
+-- deleting the helper fails the section rather than quietly passing it.
+local FAINT = Library.Sizes.ScrollBarFaint
+check("faint transparency is a real fade", type(FAINT) == "number" and FAINT > 0 and FAINT < 1, tostring(FAINT))
+check("idle delay is a real wait", type(Library.Motion.ScrollBarIdle) == "number" and Library.Motion.ScrollBarIdle > 0)
+check("QuietScrollbar installed", type(Library.QuietScrollbar) == "function")
+
+local column = Tabs.Main.Left
+check("column keeps its thickness", column.ScrollBarThickness == Library.Sizes.ScrollBar, column.ScrollBarThickness)
+check("column stays interactive", column.Active == true)
+check("column is hidden at rest", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+
+-- Content that FITS. Poking it every way the helper listens must leave the bar
+-- invisible -- a bar you cannot use is the loudest thing on a still menu.
+column.AbsoluteWindowSize = Vector2.new(300, 400)
+column.AbsoluteCanvasSize = Vector2.new(300, 220)
+check("a fitting column is hidden", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+column.MouseEnter:Fire()
+check("a fitting column stays hidden on hover", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+column.CanvasPosition = Vector2.new(0, 12)
+check("a fitting column stays hidden on scroll", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+column.MouseLeave:Fire()
+__drainDelayed()
+check("a fitting column queued nothing", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+
+-- Groupboxes grow: the same column now overflows.
+column.AbsoluteCanvasSize = Vector2.new(300, 1200)
+check("overflow alone does not show the bar", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+
+column.CanvasPosition = Vector2.new(0, 40)
+check("scrolling fades the bar in faintly", column.ScrollBarImageTransparency == FAINT, column.ScrollBarImageTransparency)
+__drainDelayed()
+check("the bar fades out again once idle", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+
+column.MouseEnter:Fire()
+check("hovering the column shows the bar", column.ScrollBarImageTransparency == FAINT, column.ScrollBarImageTransparency)
+__drainDelayed()
+check("hover holds the bar open", column.ScrollBarImageTransparency == FAINT, column.ScrollBarImageTransparency)
+
+-- A fade queued by a scroll must lose to whatever renewed interest after it,
+-- or the bar blinks out from under the cursor.
+column.MouseLeave:Fire()
+column.CanvasPosition = Vector2.new(0, 80)
+column.MouseEnter:Fire()
+__drainDelayed()
+check("a stale fade cannot fire", column.ScrollBarImageTransparency == FAINT, column.ScrollBarImageTransparency)
+
+column.MouseLeave:Fire()
+check("the bar survives the cursor leaving", column.ScrollBarImageTransparency == FAINT, column.ScrollBarImageTransparency)
+__drainDelayed()
+check("the bar hides after the cursor leaves", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+
+-- Content that shrinks back under the window takes the visible bar with it.
+column.MouseEnter:Fire()
+column.AbsoluteCanvasSize = Vector2.new(300, 100)
+check("a shrinking canvas hides the bar", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+column.MouseLeave:Fire()
+__drainDelayed()
+
+-- A Y-only column whose canvas is a hair WIDER than its window has nothing to
+-- scroll -- the sideways slack is the scrollbar inset itself. A bar that cannot
+-- be dragged anywhere is exactly the chrome this helper exists to remove.
+column.AbsoluteCanvasSize = Vector2.new(900, 220)
+column.MouseEnter:Fire()
+check("sideways overflow does not light a Y-only bar", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+column.MouseLeave:Fire()
+__drainDelayed()
+
+-- MouseEnter/MouseLeave are driven by cursor MOVEMENT, so a frame that goes out
+-- from under a STILL cursor -- a popup closing on the click that chose a row,
+-- the menu toggling off -- never delivers a MouseLeave. Hover is the one state
+-- that holds the bar up with NO fade queued, so a hover flag left standing
+-- there would pin the bar on screen for the rest of the session.
+local savedMouse = __getMouse()
+column.AbsoluteCanvasSize = Vector2.new(300, 1200)
+__setMouse(100, 46) -- inside the column once the gui inset is taken off
+column.MouseEnter:Fire()
+check("a real hover shows the bar", column.ScrollBarImageTransparency == FAINT, column.ScrollBarImageTransparency)
+column.CanvasPosition = Vector2.new(0, 60)
+__drainDelayed()
+check("a real hover holds the bar open", column.ScrollBarImageTransparency == FAINT, column.ScrollBarImageTransparency)
+__setMouse(savedMouse) -- cursor is elsewhere now, and no MouseLeave ever came
+column.AbsoluteCanvasSize = Vector2.new(300, 1400)
+__drainDelayed()
+check("a stranded hover cannot pin the bar on", column.ScrollBarImageTransparency == 1, column.ScrollBarImageTransparency)
+column.MouseLeave:Fire()
+__drainDelayed()
+
+-- The dropdown popup list is the other ScrollingFrame, and must behave the same.
+local dropdownList = O.Bone and O.Bone.List
+check("dropdown list exists", dropdownList ~= nil)
+if dropdownList then
+	check("dropdown bar is hidden at rest", dropdownList.ScrollBarImageTransparency == 1, dropdownList.ScrollBarImageTransparency)
+	check("dropdown bar keeps its thickness", dropdownList.ScrollBarThickness == Library.Sizes.ScrollBar)
+	dropdownList.AbsoluteWindowSize = Vector2.new(160, 120)
+	dropdownList.AbsoluteCanvasSize = Vector2.new(160, 500)
+	dropdownList.CanvasPosition = Vector2.new(0, 30)
+	check("dropdown bar fades in on scroll", dropdownList.ScrollBarImageTransparency == FAINT, dropdownList.ScrollBarImageTransparency)
+	__drainDelayed()
+	check("dropdown bar fades out again", dropdownList.ScrollBarImageTransparency == 1, dropdownList.ScrollBarImageTransparency)
+end
+
+-- Opt-out: a constant affordance for scripts that want one.
+step("QuietScrollbars = false keeps the bar on", function()
+	Library.QuietScrollbars = false
+	local constant = Instance.new("ScrollingFrame")
+	Library:QuietScrollbar(constant)
+	check("opt-out bar starts faint", constant.ScrollBarImageTransparency == FAINT, constant.ScrollBarImageTransparency)
+	constant.AbsoluteWindowSize = Vector2.new(300, 400)
+	constant.AbsoluteCanvasSize = Vector2.new(300, 1200)
+	constant.CanvasPosition = Vector2.new(0, 40)
+	constant.MouseEnter:Fire()
+	constant.MouseLeave:Fire()
+	__drainDelayed()
+	check("opt-out bar never fades out", constant.ScrollBarImageTransparency == FAINT, constant.ScrollBarImageTransparency)
+	Library.QuietScrollbars = true
+end)
+
+--==============================================================
 -- overlays
 --==============================================================
 
@@ -1153,6 +1277,15 @@ check("theme folder untouched", Library.ThemeManager.Folder == "SableSmoke", Lib
 local signalCount = #Library.Signals
 check("signals were tracked", signalCount > 0, signalCount)
 
+-- A column scrolled a frame before Unload leaves a fade in flight; by the time
+-- it lands the ScreenGui has been destroyed under it. Queue one here, then
+-- check below that it never writes to the dead frame.
+local dyingColumn = Tabs.Main.Left
+dyingColumn.AbsoluteWindowSize = Vector2.new(300, 400)
+dyingColumn.AbsoluteCanvasSize = Vector2.new(300, 2000)
+dyingColumn.CanvasPosition = Vector2.new(0, 150)
+check("a scroll before unload leaves the bar up", dyingColumn.ScrollBarImageTransparency == FAINT, dyingColumn.ScrollBarImageTransparency)
+
 step("Unload", function()
 	Library:Unload()
 end)
@@ -1190,6 +1323,22 @@ end)
 step("delayed timers after unload do not error", function()
 	__drainDelayed()
 	__RunService.RenderStepped:Fire(1 / 60)
+end)
+-- The scrollbar fade is the one timer that outlives the gui it writes to: the
+-- column above was scrolled a frame before Unload, so this is where that fade
+-- lands -- on a destroyed instance, with the registry already cleared.
+step("a fade queued before unload does not touch the destroyed column", function()
+	__drainDelayed()
+	check(
+		"the pending fade was skipped",
+		dyingColumn.ScrollBarImageTransparency == FAINT,
+		dyingColumn.ScrollBarImageTransparency
+	)
+	-- Poking a dead column must be inert too: its connections went with Unload.
+	dyingColumn.CanvasPosition = Vector2.new(0, 400)
+	dyingColumn.MouseEnter:Fire()
+	dyingColumn.MouseLeave:Fire()
+	__drainDelayed()
 end)
 
 --==============================================================

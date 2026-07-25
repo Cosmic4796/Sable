@@ -284,6 +284,11 @@ local DEFAULTS = {
 	AbsolutePosition = constant(Vector2.new(0, 0)),
 	AbsoluteContentSize = constant(Vector2.new(0, 0)),
 	CanvasPosition = constant(Vector2.new(0, 0)),
+	-- A real ScrollingFrame always answers these with a Vector2; returning nil
+	-- would make "does this overflow?" a mock-only error instead of a test. A
+	-- canvas that matches the window is the honest default: nothing to scroll.
+	AbsoluteWindowSize = constant(Vector2.new(300, 20)),
+	AbsoluteCanvasSize = constant(Vector2.new(300, 20)),
 	Visible = constant(true),
 	Text = constant(""),
 	PlaceholderText = constant(""),

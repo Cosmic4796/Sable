@@ -464,15 +464,16 @@ function Window.Install(Library)
 			CanvasSize = UDim2.fromOffset(0, 0),
 			ElasticBehavior = Enum.ElasticBehavior.Never,
 			Position = isLeft and UDim2.fromScale(0, 0) or UDim2.new(0.5, HalfGap, 0, 0),
-			ScrollBarImageTransparency = 0,
 			ScrollBarThickness = Sizes.ScrollBar,
 			ScrollingDirection = Enum.ScrollingDirection.Y,
 			Size = UDim2.new(0.5, -HalfGap, 1, 0),
 			TopImage = FLAT_SCROLL,
 			VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
-			Theme = { ScrollBarImageColor3 = "Outline" },
 			Parent = page,
 		})
+
+		-- Owns the bar's colour and transparency from here on.
+		Library:QuietScrollbar(column)
 
 		-- Side padding is a hairline wide so a groupbox's UIStroke, which draws
 		-- outside the frame, is not eaten by the ScrollingFrame's clipping.

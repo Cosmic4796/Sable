@@ -133,7 +133,10 @@ Library:SetScheme("Accent", Color3.fromRGB(...))   -- live retheme
 Library:OnUnload(fn) / Library:Unload()
 ```
 
-Menu hotkey defaults to `Insert`.
+Menu hotkey defaults to `Insert`. Scrollbars are invisible until a column is
+scrolled or hovered — set `Library.QuietScrollbars = false` before `CreateWindow`
+for a constant faint bar, or call `Library:QuietScrollbar(frame)` on your own
+`ScrollingFrame`.
 
 ## Themes and configs
 

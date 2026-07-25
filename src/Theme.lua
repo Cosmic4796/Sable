@@ -100,6 +100,11 @@ Theme.Sizes = {
 	PopupMaxItems = 9,
 
 	ScrollBar = 3,
+	-- The stock scrollbar is the last piece of default Roblox chrome left in the
+	-- design, so it is invisible at rest and never comes back further than this:
+	-- enough to read a position from, not enough to become furniture. The bar
+	-- keeps its thickness while hidden -- a zero-width bar has no drag target.
+	ScrollBarFaint = 0.5,
 }
 
 -- Monospace throughout. Mixing a proportional UI font in is the single fastest
@@ -114,6 +119,10 @@ Theme.Motion = {
 	Fast = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 	Slow = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 	Fade = 0.14,
+	-- Seconds a scrollbar stays up after the last scroll, once the cursor is no
+	-- longer over the column. Long enough to finish the gesture, short enough
+	-- that a still menu has no scrollbars in it at all.
+	ScrollBarIdle = 0.6,
 }
 
 --==============================================================

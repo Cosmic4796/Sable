@@ -102,7 +102,9 @@ switching works. **A hardcoded Color3 in an element is a bug.**
 `RowHeight 26` · `RowGap 4` · `GroupPad 12` · `GroupGap 12` · `ColumnGap 12` ·
 `GroupHeader 20` · `Outline 1` · `Tick 8` · `Text 13` · `TextSmall 12` ·
 `TextTitle 14` · `Control 15` · `Track 9` · `Segments 16` · `Indicator 2` ·
-`PickerSquare 144` · `PopupMinWidth 140` · `PopupMaxItems 9` · `ScrollBar 3`
+`PickerSquare 144` · `PopupMinWidth 140` · `PopupMaxItems 9` · `ScrollBar 3` ·
+`ScrollBarFaint 0.5` (transparency the bar fades *in* to) — with
+`Motion.ScrollBarIdle 0.6` (seconds before it fades back out)
 
 Elements derive their internal gaps from these rather than inventing new keys.
 Half a `GroupPad` (`math.ceil(GroupPad / 2)`) is the library's inner gap unit —
@@ -119,6 +121,21 @@ inner insets, cell gutters and marker overhangs are all counted in hairlines.
 - **Interrupted group header** — a groupbox's top hairline is broken by its
   title. Implement as a `TextLabel` with an opaque `Background` fill and ~4px
   horizontal padding, positioned over the top edge with a higher `ZIndex`.
+- **Quiet scrollbars** — the stock Roblox bar is the last default chrome in the
+  design, so every `ScrollingFrame` goes through `Library:QuietScrollbar`:
+  `ScrollBarImageTransparency` is 1 at rest, tweens to `Sizes.ScrollBarFaint`
+  over `Motion.Fast` while the canvas moves or the cursor is over the frame, and
+  back to 1 over `Motion.Slow` `Motion.ScrollBarIdle` seconds after both stop.
+  It never appears while `AbsoluteCanvasSize` fits `AbsoluteWindowSize` on an
+  axis `ScrollingDirection` actually scrolls, and it is re-evaluated when the
+  canvas size changes, since groupboxes grow and shrink. Hover is the one state
+  that holds the bar up with no fade queued, and `MouseLeave` never arrives when
+  a frame is hidden under a still cursor, so hover is re-tested against the
+  cursor rather than trusted — a bar can never be pinned on by a stale hover.
+  The colour stays `Outline` through the registry — never `Accent`,
+  which means on/active. `ScrollBarThickness` is never touched: a zero-width bar
+  is also a zero-width drag target. `Library.QuietScrollbars = false`, set
+  before the window is created, pins every bar at the faint value instead.
 - **Segmented slider bar** — the track is `Library.Sizes.Segments` (16) equal
   frames in a horizontal `UIListLayout`. Value changes **recolour** segments
   (`Accent` filled / `PanelSunken` empty); they are never resized. The numeric
@@ -137,6 +154,7 @@ Library:Label(props, colorKey)           -- monospace TextLabel, left aligned
 Library:Row(container, height)           -- full-width row inside a container
 Library:HitButton(parent, props)         -- invisible TextButton for hit testing
 Library:CornerTicks(parent, colorKey, length, thickness)
+Library:QuietScrollbar(scrollingFrame)   -- REQUIRED on every ScrollingFrame
 Library:Tween(instance, props, info)
 Library:BindHover(button, target, normalKey, hoverKey)
 Library:MakeDraggable(handle, target)
