@@ -150,13 +150,34 @@ function Color3.fromHSV(h, s, v)
 	return Color3.new(v, p, q)
 end
 
+-- UDim and UDim2 are VALUE types in Roblox: two separately built ones with the
+-- same components are equal. Without __eq they compare by table identity, which
+-- makes `a.Size == b.Size` permanently false -- so an assertion written as
+-- `~=` would be a false pass. Vector2 and Color3 already model this.
 local UDimMT = { __index = {} }
+UDimMT.__eq = function(a, b)
+	return a.Scale == b.Scale and a.Offset == b.Offset
+end
+UDimMT.__tostring = function(u)
+	return ("UDim(%s, %s)"):format(tostring(u.Scale), tostring(u.Offset))
+end
 UDim = {}
 function UDim.new(scale, offset)
 	return setmetatable({ Scale = scale or 0, Offset = offset or 0, __t = "UDim" }, UDimMT)
 end
 
 local UDim2MT = { __index = {} }
+UDim2MT.__eq = function(a, b)
+	return a.X == b.X and a.Y == b.Y
+end
+UDim2MT.__tostring = function(v)
+	return ("UDim2(%s, %s, %s, %s)"):format(
+		tostring(v.X.Scale),
+		tostring(v.X.Offset),
+		tostring(v.Y.Scale),
+		tostring(v.Y.Offset)
+	)
+end
 UDim2 = {}
 function UDim2.new(xs, xo, ys, yo)
 	return setmetatable({ X = UDim.new(xs, xo), Y = UDim.new(ys, yo), __t = "UDim2" }, UDim2MT)
@@ -869,8 +890,18 @@ local services = {
 		end,
 	},
 	TextService = {
-		GetTextSize = function(_, text, size, _, _)
-			return Vector2.new(#tostring(text) * size * 0.6, size)
+		-- Honours the `bounds` argument the way the real API does: given a
+		-- finite width the text WRAPS, and the returned height grows by the
+		-- line. Ignoring it made every wrapped measurement exactly one line
+		-- tall, which is a FALSE PASS for anything that sizes itself from
+		-- wrapped copy -- a notification panel, a paragraph row.
+		GetTextSize = function(_, text, size, _, bounds)
+			local width = #tostring(text) * size * 0.6
+			local limit = bounds and bounds.X or math.huge
+			if limit > 0 and limit < math.huge and width > limit then
+				return Vector2.new(limit, math.ceil(width / limit) * size)
+			end
+			return Vector2.new(width, size)
 		end,
 	},
 	UserInputService = userInput,
@@ -989,7 +1020,17 @@ end
 identifyexecutor = function()
 	return "SableMock"
 end
-setclipboard = function() end
+-- A clipboard that REMEMBERS, so "we copied it" can be asserted rather than
+-- assumed, and that can be made to throw the way a host with a broken
+-- setclipboard does -- Util.SetClipboard pcalls it and reports false.
+__clipboard = nil
+__clipboardFails = false
+setclipboard = function(text)
+	if __clipboardFails then
+		error("clipboard unavailable")
+	end
+	__clipboard = tostring(text)
+end
 gethui = function()
 	return coreGui
 end

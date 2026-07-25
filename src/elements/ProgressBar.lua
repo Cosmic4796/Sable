@@ -1,32 +1,35 @@
 --!nonstrict
--- Sable :: elements/Slider
+-- Sable :: elements/ProgressBar
 --
--- The segmented instrument slider. The track is a fixed number of equal-width
--- cells that light up as the value rises -- nothing ever resizes, which is what
--- makes it read as equipment rather than as a loading bar. The right-hand
--- readout carries the exact value, because 16 cells cannot.
+-- A read-only readout wearing the slider's clothes: same segmented track, same
+-- right-aligned monospace value. Farm progress, a cooldown, a health bar --
+-- anything the SCRIPT knows and the user only watches.
 --
--- The bar itself is elements/Track, shared with ProgressBar. Everything wrapped
--- around it here -- the hit target, the drag, the readout that brightens while
--- it is held -- is what makes this one a control and that one a readout.
+-- What makes it a readout rather than a control is everything it does not have:
+-- no hit button, no drag, no hover, and a value column that never brightens,
+-- because nothing the user does can move it. Sharing the track with Slider is
+-- deliberate (see elements/Track): one segmented bar, two meanings.
+--
+-- It is registered in Library.Options so a script can drive it by index, but it
+-- carries no persistent state -- SaveManager's serialize() has no case for this
+-- type and returns nil, so it never reaches a config file.
 
 local Util = require("Util")
 local Base = require("elements/Base")
 local Track = require("elements/Track")
 
-local Slider = {}
+local ProgressBar = {}
 
--- Share of the row a label may claim before it starts squeezing the track. A
--- ratio, not a pixel: the row width is layout-driven and changes when the window
--- is resized, so a fixed cap would be wrong at every size but one.
+-- Share of the row the label may claim before it starts squeezing the track,
+-- matching Slider: the same row shape has to hold the same proportions.
 local LABEL_SHARE = 0.45
 
 local ROUNDING_MAX = 6
 
-function Slider.New(Library, container, index, options)
+function ProgressBar.New(Library, container, index, options)
 	options = options or {}
 
-	local element = Base.Create(Library, container, "Slider", index, options)
+	local element = Base.Create(Library, container, "ProgressBar", index, options)
 
 	local Sizes = Library.Sizes
 	-- label <-> track <-> readout. Half a group pad is the library's inner gap
@@ -36,8 +39,9 @@ function Slider.New(Library, container, index, options)
 	element.Min = tonumber(options.Min) or 0
 	element.Max = tonumber(options.Max) or 100
 	element.Rounding = math.floor(Util.Clamp(tonumber(options.Rounding) or 0, 0, ROUNDING_MAX))
-	element.Suffix = tostring(options.Suffix or "")
-	element.Compact = options.Compact == true
+	-- Percent by default: a bar with no suffix reads as a bare number, and the
+	-- overwhelmingly common progress readout is a percentage.
+	element.Suffix = options.Suffix ~= nil and tostring(options.Suffix) or "%"
 	element.Segments = Track.Count(options.Segments, Sizes)
 	element.Value = element.Min
 
@@ -56,20 +60,15 @@ function Slider.New(Library, container, index, options)
 		Size = UDim2.new(0, 0, 1, 0),
 		Text = Library:FormatLabel(element.Text),
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Visible = not element.Compact,
 		Parent = row,
 	}, element.Risky and "Risk" or "Font")
 	element.Label = label
 
-	-- Declared ahead of the readout: its registry entry closes over this so a
-	-- theme switch mid-drag still resolves to the active colour.
-	local dragging = false
-
+	--- FontDim at rest, always. A slider's readout brightens while it is being
+	--- dragged; there is no drag here, so brightening would promise an
+	--- interaction that does not exist.
 	local function readoutKey()
-		if element.Disabled then
-			return "FontFaint"
-		end
-		return dragging and "Font" or "FontDim"
+		return element.Disabled and "FontFaint" or "FontDim"
 	end
 
 	local readout = Library:Create("TextLabel", {
@@ -92,28 +91,16 @@ function Slider.New(Library, container, index, options)
 		Parent = row,
 	})
 
-	-- The segmented bar itself is shared with ProgressBar; see elements/Track.
 	local bar = Track.New(Library, row, element.Segments)
 	local trough = bar.Trough
 	element.Bar = bar
-
-	-- Taller and wider than the trough: a Track-tall grab target is a nuisance,
-	-- so the hit area is grown out to the full row height plus a gap of overhang
-	-- on either side.
-	local hit = Library:HitButton(trough, {
-		Name = "Hit",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.new(1, Sizes.RowGap, 1, math.max(0, Sizes.RowHeight - Sizes.Track)),
-	})
-	element.Hit = hit
 
 	--==============================================================
 	-- value math
 	--==============================================================
 
-	--- A Max below Min collapses to a single-value slider rather than dividing
-	--- by a negative span.
+	--- A Max below Min collapses to a single-value bar rather than dividing by a
+	--- negative span.
 	local function bounds()
 		local low = element.Min
 		local high = element.Max
@@ -163,34 +150,21 @@ function Slider.New(Library, container, index, options)
 
 		readout.Size = UDim2.new(0, readoutWidth, 1, 0)
 
-		local labelWidth = 0
-		if not element.Compact then
-			labelWidth = measure(label.Text, Sizes.Text, Library.Fonts.Label) + Sizes.Outline
+		local labelWidth = measure(label.Text, Sizes.Text, Library.Fonts.Label) + Sizes.Outline
 
-			-- Capped against the LIVE row, not a fixed pixel budget, so the same
-			-- cap holds after the window is resized. Before the first layout pass
-			-- the row has no width yet and the measured label stands.
-			local available = row.AbsoluteSize.X
-			if available > 0 then
-				labelWidth = math.min(labelWidth, math.floor(available * LABEL_SHARE))
-			end
+		-- Capped against the LIVE row, not a fixed pixel budget, so the same cap
+		-- holds after the window is resized. Before the first layout pass the row
+		-- has no width yet and the measured label stands.
+		local available = row.AbsoluteSize.X
+		if available > 0 then
+			labelWidth = math.min(labelWidth, math.floor(available * LABEL_SHARE))
 		end
 
-		label.Visible = not element.Compact
 		label.Size = UDim2.new(0, labelWidth, 1, 0)
 
 		local left = labelWidth > 0 and labelWidth + gap or 0
 		trough.Position = UDim2.new(0, left, 0.5, 0)
 		trough.Size = UDim2.new(1, -(left + gap + readoutWidth), 0, Sizes.Track)
-	end
-
-	local function paintReadout(animate)
-		local color = Library:GetColor(readoutKey())
-		if animate then
-			Library:Tween(readout, { TextColor3 = color }, Library.Motion.Fast)
-		else
-			readout.TextColor3 = color
-		end
 	end
 
 	--==============================================================
@@ -247,80 +221,15 @@ function Slider.New(Library, container, index, options)
 	-- Overrides Base so the label column is re-measured when the text changes.
 	function element:SetText(text)
 		self.Text = text or ""
-		label.Text = Library:FormatLabel(self.Text)
+		label.Text = self.Library:FormatLabel(self.Text)
 		relayout()
 		return self
 	end
 
 	element.OnDisabledChanged = function()
-		paintReadout(false)
+		readout.TextColor3 = Library:GetColor(readoutKey())
 		element:Display()
 	end
-
-	--==============================================================
-	-- dragging
-	--==============================================================
-
-	local function applyFromMouse()
-		local width = trough.AbsoluteSize.X
-		if width <= 0 then
-			return
-		end
-
-		-- Measured against the trough's AbsolutePosition, so the cursor has to be
-		-- in that space: a raw reading drags the value by the gui inset.
-		local alpha = Util.Clamp((Util.MouseInGuiSpace().X - trough.AbsolutePosition.X) / width, 0, 1)
-		local low, high = bounds()
-		local value = normalize(low + alpha * (high - low))
-
-		if value ~= element.Value then
-			element:SetValue(value)
-		end
-	end
-
-	local function isDragInput(input)
-		return input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-	end
-
-	Library:GiveSignal(hit.InputBegan:Connect(function(input)
-		if Library.Unloaded or element.Disabled or not isDragInput(input) then
-			return
-		end
-
-		dragging = true
-		paintReadout(true)
-		applyFromMouse()
-	end))
-
-	-- Movement and release are tracked on the library-wide signals, not on the
-	-- button, so a drag survives the cursor leaving the row.
-	Library:GiveSignal(Library.InputChanged:Connect(function(input)
-		if not dragging then
-			return
-		end
-		if Library.Unloaded then
-			dragging = false
-			return
-		end
-		if
-			input.UserInputType ~= Enum.UserInputType.MouseMovement
-			and input.UserInputType ~= Enum.UserInputType.Touch
-		then
-			return
-		end
-
-		applyFromMouse()
-	end))
-
-	Library:GiveSignal(Library.InputEnded:Connect(function(input)
-		if not dragging or not isDragInput(input) then
-			return
-		end
-
-		dragging = false
-		paintReadout(true)
-	end))
 
 	--==============================================================
 	-- init
@@ -336,9 +245,9 @@ function Slider.New(Library, container, index, options)
 	end))
 
 	relayout()
-	element:SetValue(options.Default, true)
+	element:SetValue(options.Default ~= nil and options.Default or 0, true)
 
 	return Base.Finish(element, Library.Options)
 end
 
-return Slider
+return ProgressBar

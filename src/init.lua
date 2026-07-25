@@ -23,7 +23,7 @@ local Library = {
 }
 
 Library.Name = "Sable"
-Library.Version = "1.1.0"
+Library.Version = "1.2.0"
 Library.Util = Util
 Library.Signal = Signal
 

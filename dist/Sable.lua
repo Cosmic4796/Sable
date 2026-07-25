@@ -1,6 +1,6 @@
 --!nonstrict
--- Sable v1.1.0 - generated bundle. Do not edit; edit src/ and rebuild.
--- 19 modules, built by tools/build.py
+-- Sable v1.2.0 - generated bundle. Do not edit; edit src/ and rebuild.
+-- 24 modules, built by tools/build.py
 
 local __modules = {}
 local __cache = {}
@@ -3336,6 +3336,11 @@ __modules["addons/SaveManager"] = function()
 -- <folder>/settings/<name>.json, and rebuilds them by calling :SetValue so the
 -- script's own callbacks run exactly as if the user had clicked.
 --
+-- Also turns a config into one line of paste-safe text ("SABLE1:...") so it can
+-- be handed to someone else, and back again. Export copies to the clipboard;
+-- import reads a TextBox, because setclipboard is near-universal among
+-- executors and a working getclipboard is not.
+--
 -- Reached as Library.SaveManager -- the spine calls :SetLibrary for you; the
 -- method survives being called again so ported scripts keep working. Every
 -- filesystem call goes through Util.FS, which no-ops outside an executor, so
@@ -3345,6 +3350,7 @@ local Util = require("Util")
 
 local NAME_INDEX = "SaveManager_ConfigName"
 local LIST_INDEX = "SaveManager_ConfigList"
+local SHARE_INDEX = "SaveManager_ConfigShare"
 
 --- Fallback for :IgnoreThemeSettings when the ThemeManager is not reachable.
 --- Mirrors ThemeManager.Indexes; keep the two in step.
@@ -3364,13 +3370,15 @@ local SaveManager = {}
 SaveManager.Library = nil :: any
 SaveManager.Folder = "Sable"
 SaveManager.AutoloadName = nil :: any
-SaveManager.Indexes = { NAME_INDEX, LIST_INDEX }
+SaveManager.Indexes = { NAME_INDEX, LIST_INDEX, SHARE_INDEX }
 
---- index -> true. Its own two controls are always skipped: a config that
---- restored the config picker would fight with the user.
+--- index -> true. Its own three controls are always skipped: a config that
+--- restored the config picker -- or pasted a whole other config into the import
+--- box -- would fight with the user.
 SaveManager.Ignore = {
 	[NAME_INDEX] = true,
 	[LIST_INDEX] = true,
+	[SHARE_INDEX] = true,
 }
 
 --- Elements built by :BuildConfigSection.
@@ -3517,6 +3525,310 @@ local function deserialize(element, entry)
 	end
 
 	return true
+end
+
+--==============================================================
+-- share encoding
+--==============================================================
+
+-- A shared config is ONE line: "SABLE1:" followed by base64 of a small payload.
+-- The version lives in the prefix so a build that cannot read a string can say
+-- so instead of guessing, and the payload's first byte says how the JSON inside
+-- was packed -- MODE_RAW for plain text, MODE_LZW for the compressor below.
+-- That byte is what lets compression be skipped for a payload it does not help,
+-- or fail safe, without a second prefix to explain.
+local SHARE_PREFIX = "SABLE"
+local SHARE_VERSION = 1
+local SHARE_PATTERN = "^" .. SHARE_PREFIX .. "(%d+):(.*)$"
+
+local MODE_RAW = "R"
+local MODE_LZW = "Z"
+
+--- LZW codes are a fixed 12 bits, two to every three bytes, and the dictionary
+--- FREEZES at this size rather than resetting. A reset has to be synchronised
+--- with a decoder that is always exactly one entry behind the encoder; a frozen
+--- dictionary needs no synchronisation at all, and configs never come close.
+local LZW_MAX_CODES = 4096
+
+local B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local B64_VALUE = {}
+for index = 1, #B64_ALPHABET do
+	B64_VALUE[B64_ALPHABET:sub(index, index)] = index - 1
+end
+-- Decode-only tolerance: chat clients and forums love rewriting a pasted "+/"
+-- into the url-safe "-_". We never emit those, but we accept them.
+B64_VALUE["-"] = 62
+B64_VALUE["_"] = 63
+
+local function b64Char(value)
+	return B64_ALPHABET:sub(value + 1, value + 1)
+end
+
+local function base64Encode(data)
+	local out = {}
+	local length = #data
+	local index = 1
+
+	while index + 2 <= length do
+		local a, b, c = data:byte(index, index + 2)
+		local packed = a * 65536 + b * 256 + c
+		out[#out + 1] = b64Char(math.floor(packed / 262144))
+			.. b64Char(math.floor(packed / 4096) % 64)
+			.. b64Char(math.floor(packed / 64) % 64)
+			.. b64Char(packed % 64)
+		index += 3
+	end
+
+	local remaining = length - index + 1
+	if remaining == 1 then
+		local a = data:byte(index)
+		out[#out + 1] = b64Char(math.floor(a / 4)) .. b64Char((a % 4) * 16) .. "=="
+	elseif remaining == 2 then
+		local a, b = data:byte(index, index + 1)
+		local packed = a * 256 + b
+		out[#out + 1] = b64Char(math.floor(packed / 1024))
+			.. b64Char(math.floor(packed / 16) % 64)
+			.. b64Char((packed % 16) * 4)
+			.. "="
+	end
+
+	return table.concat(out)
+end
+
+--- Returns nil for anything that is not base64 rather than erroring: this runs
+--- on text a user pasted, so "damaged" is an ordinary outcome, not a fault.
+local function base64Decode(text)
+	if type(text) ~= "string" then
+		return nil
+	end
+
+	-- Whitespace anywhere is fine: a long string wrapped by a chat client is
+	-- still the same string once the newlines come out.
+	local clean = (text:gsub("%s", ""))
+	clean = (clean:gsub("=+$", ""))
+	if clean:find("=", 1, true) then
+		return nil
+	end
+
+	-- Four base64 digits carry three bytes; a lone leftover digit carries none,
+	-- so that length can only mean the string was cut short.
+	if #clean % 4 == 1 then
+		return nil
+	end
+
+	local out = {}
+	local accumulator, bits = 0, 0
+
+	for index = 1, #clean do
+		local value = B64_VALUE[clean:sub(index, index)]
+		if value == nil then
+			return nil
+		end
+
+		accumulator = accumulator * 64 + value
+		bits += 6
+
+		if bits >= 8 then
+			bits -= 8
+			local scale = 2 ^ bits
+			local byte = math.floor(accumulator / scale)
+			accumulator -= byte * scale
+			out[#out + 1] = string.char(byte)
+		end
+	end
+
+	return table.concat(out)
+end
+
+--- Textbook LZW over the byte string. Single bytes are their own codes, so the
+--- dictionary only ever holds sequences of two or more.
+local function lzwCompress(data)
+	local dictionary = {}
+	local nextCode = 256
+	local codes = {}
+	local word = nil
+
+	local function codeOf(text)
+		if #text == 1 then
+			return text:byte()
+		end
+		return dictionary[text]
+	end
+
+	for index = 1, #data do
+		local char = data:sub(index, index)
+
+		if word == nil then
+			word = char
+		else
+			local candidate = word .. char
+			if dictionary[candidate] then
+				word = candidate
+			else
+				codes[#codes + 1] = codeOf(word)
+				if nextCode < LZW_MAX_CODES then
+					dictionary[candidate] = nextCode
+					nextCode += 1
+				end
+				word = char
+			end
+		end
+	end
+
+	if word ~= nil then
+		codes[#codes + 1] = codeOf(word)
+	end
+
+	return codes
+end
+
+--- The decoder's dictionary is always one entry behind the encoder's, which is
+--- why a code can legitimately name the entry that is about to be added -- the
+--- KwKwK case below. Any code beyond that is corruption, and returns nil.
+local function lzwDecompress(codes)
+	local entries = {}
+	local nextCode = 256
+	local out = {}
+	local previous = nil
+
+	for _, code in codes do
+		local entry
+		if code < 256 then
+			entry = string.char(code)
+		elseif entries[code] then
+			entry = entries[code]
+		elseif code == nextCode and previous ~= nil then
+			entry = previous .. previous:sub(1, 1)
+		else
+			return nil
+		end
+
+		out[#out + 1] = entry
+
+		if previous ~= nil and nextCode < LZW_MAX_CODES then
+			entries[nextCode] = previous .. entry:sub(1, 1)
+			nextCode += 1
+		end
+
+		previous = entry
+	end
+
+	return table.concat(out)
+end
+
+--- Two 12-bit codes per three bytes. An odd final code takes two bytes and
+--- leaves a zero nibble, which is why the count is stored separately.
+local function packCodes(codes)
+	local out = {}
+	local index = 1
+	local count = #codes
+
+	while index <= count do
+		local first = codes[index]
+		local second = codes[index + 1]
+
+		if second then
+			out[#out + 1] = string.char(
+				math.floor(first / 16),
+				(first % 16) * 16 + math.floor(second / 256),
+				second % 256
+			)
+			index += 2
+		else
+			out[#out + 1] = string.char(math.floor(first / 16), (first % 16) * 16)
+			index += 1
+		end
+	end
+
+	return table.concat(out)
+end
+
+local function unpackCodes(data, count)
+	local codes = {}
+	local index = 1
+
+	while #codes < count do
+		local first, second, third = data:byte(index, index + 2)
+		if first == nil or second == nil then
+			return nil
+		end
+
+		codes[#codes + 1] = first * 16 + math.floor(second / 16)
+
+		if #codes < count then
+			if third == nil then
+				return nil
+			end
+			codes[#codes + 1] = (second % 16) * 256 + third
+		end
+
+		index += 3
+	end
+
+	return codes
+end
+
+local function writeUInt32(value)
+	return string.char(
+		math.floor(value / 16777216) % 256,
+		math.floor(value / 65536) % 256,
+		math.floor(value / 256) % 256,
+		value % 256
+	)
+end
+
+local function readUInt32(data, index)
+	local a, b, c, d = data:byte(index, index + 3)
+	if a == nil or b == nil or c == nil or d == nil then
+		return nil
+	end
+	return a * 16777216 + b * 65536 + c * 256 + d
+end
+
+--- Payload -> JSON text, or nil plus a reason a human can act on.
+local function unpackPayload(payload)
+	local mode = payload:sub(1, 1)
+
+	if mode == MODE_RAW then
+		return payload:sub(2)
+	elseif mode ~= MODE_LZW then
+		return nil, "Config string uses a format this build does not know"
+	end
+
+	local count = readUInt32(payload, 2)
+	if not count then
+		return nil, "Config string is damaged (payload is cut short)"
+	end
+
+	local codes = unpackCodes(payload:sub(6), count)
+	if not codes then
+		return nil, "Config string is damaged (payload is cut short)"
+	end
+
+	local text = lzwDecompress(codes)
+	if not text then
+		return nil, "Config string is damaged (could not be unpacked)"
+	end
+
+	return text
+end
+
+--- JSON text -> the payload the base64 carries.
+---
+--- The compressed form is DECODED and compared before it is used. Compression
+--- is an optimisation; correctness is not. If the two ever disagree -- or if
+--- compressing did not actually save anything -- the plain payload ships, and
+--- the mode byte tells the far end which it got.
+local function packPayload(json)
+	local codes = lzwCompress(json)
+	local compressed = MODE_LZW .. writeUInt32(#codes) .. packCodes(codes)
+
+	if #compressed < #json + 1 and unpackPayload(compressed) == json then
+		return compressed
+	end
+
+	return MODE_RAW .. json
 end
 
 --==============================================================
@@ -3864,6 +4176,193 @@ function SaveManager:LoadAutoloadConfig()
 end
 
 --==============================================================
+-- sharing
+--==============================================================
+
+--- Config -> one line of paste-safe text, or nil plus a reason.
+---
+--- A name encodes that saved config exactly as it sits on disk; no name encodes
+--- what is on screen right now, so a config can be shared without saving it
+--- first.
+function SaveManager:ExportConfig(name)
+	local objects, label
+
+	if name == nil then
+		objects, label = self:Collect(), nil
+	else
+		local clean = self:Sanitize(name)
+		if not clean then
+			return nil, "Select a config first"
+		end
+
+		if not Util.FS.Available() then
+			return nil, "Filesystem unavailable"
+		end
+
+		local data = Util.FS.ReadJSON(self:ConfigPath(clean))
+		if type(data) ~= "table" or type(data.objects) ~= "table" then
+			return nil, ("%s could not be read"):format(clean)
+		end
+
+		objects, label = data.objects, clean
+	end
+
+	if #objects == 0 then
+		return nil, "This config holds no values to share"
+	end
+
+	local ok, json = pcall(function()
+		return Util.Services.Http:JSONEncode({
+			name = label,
+			version = 1,
+			objects = objects,
+		})
+	end)
+
+	if not ok or type(json) ~= "string" then
+		return nil, "Could not encode this config"
+	end
+
+	return ("%s%d:%s"):format(SHARE_PREFIX, SHARE_VERSION, base64Encode(packPayload(json)))
+end
+
+--- Text -> config table, or nil plus a reason. Pure: no elements are touched,
+--- nothing is written, nothing is notified. Every failure is a return value,
+--- because this is the one entry point fed arbitrary text by a human.
+function SaveManager:DecodeConfig(text)
+	if type(text) ~= "string" then
+		return nil, "Paste a config string first"
+	end
+
+	local trimmed = (text:gsub("^%s+", ""))
+	trimmed = (trimmed:gsub("%s+$", ""))
+	if trimmed == "" then
+		return nil, "Paste a config string first"
+	end
+
+	local version, body = trimmed:match(SHARE_PATTERN)
+	if not version then
+		return nil, ("Not a Sable config string (it must start with %s%d:)"):format(SHARE_PREFIX, SHARE_VERSION)
+	end
+
+	if tonumber(version) ~= SHARE_VERSION then
+		return nil, ("Config string is version %s; this build reads version %d"):format(version, SHARE_VERSION)
+	end
+
+	local payload = base64Decode(body)
+	if not payload then
+		return nil, "Config string is damaged (unreadable characters)"
+	end
+
+	-- An empty body decodes cleanly to nothing at all, which is a different
+	-- fault from a damaged one: the string was cut off at the prefix.
+	if payload == "" then
+		return nil, "Config string carries nothing after the prefix"
+	end
+
+	local json, reason = unpackPayload(payload)
+	if not json then
+		return nil, reason or "Config string is damaged"
+	end
+
+	local ok, decoded = pcall(function()
+		return Util.Services.Http:JSONDecode(json)
+	end)
+
+	if not ok then
+		return nil, "Config string is damaged (contents are not readable)"
+	end
+
+	if type(decoded) ~= "table" then
+		return nil, ("Config string decoded to a %s, not a config"):format(type(decoded))
+	end
+
+	if type(decoded.objects) ~= "table" then
+		return nil, "That string decoded, but it is not a config"
+	end
+
+	return decoded
+end
+
+--- Applies a shared string to the live elements, and -- when a name is given --
+--- saves it so it survives the session.
+---
+--- The FILE is the payload verbatim, not a re-collect of what landed: entries
+--- for elements this hub does not have are then still there for the hub that
+--- does, and the saved config is byte-for-byte the one that was shared.
+function SaveManager:ImportConfig(text, name)
+	local Library = self.Library
+
+	local data, reason = self:DecodeConfig(text)
+	if not data then
+		notify(Library, reason, "risk")
+		return false, reason
+	end
+
+	local applied = self:Apply(data.objects)
+
+	if type(name) ~= "string" or name == "" then
+		notify(Library, ("Imported %d value(s)"):format(applied), "good")
+		return true
+	end
+
+	-- Saving is the optional half. The values are already in, so a failure past
+	-- this point reports what did and did not happen rather than claiming the
+	-- whole import failed.
+	local clean = self:Sanitize(name)
+	if not clean then
+		notify(Library, ("Imported %d value(s); the config name is not usable"):format(applied), "risk")
+		return true
+	end
+
+	if not Util.FS.Available() then
+		notify(Library, ("Imported %d value(s); filesystem unavailable, not saved"):format(applied), "risk")
+		return true
+	end
+
+	self:BuildFolders()
+
+	local written = Util.FS.WriteJSON(self:ConfigPath(clean), {
+		name = clean,
+		version = 1,
+		objects = data.objects,
+	})
+
+	if not written then
+		notify(Library, ("Imported %d value(s); could not save %s"):format(applied, clean), "risk")
+		return true
+	end
+
+	self:RefreshConfigList()
+	notify(Library, ("Imported %d value(s), saved as %s"):format(applied, clean), "good")
+
+	return true
+end
+
+--- Export + clipboard. Returns the string as well, because a host with no
+--- working setclipboard still produced one -- the caller can print it, and the
+--- user is told the clipboard was the part that failed, not the export.
+function SaveManager:CopyConfig(name)
+	local Library = self.Library
+
+	local text, reason = self:ExportConfig(name)
+	if not text then
+		notify(Library, reason or "Could not export this config", "risk")
+		return false, nil, reason
+	end
+
+	if not Util.SetClipboard(text) then
+		notify(Library, "Clipboard unavailable, nothing was copied", "risk")
+		return false, text
+	end
+
+	local what = name ~= nil and (self:Sanitize(name) or tostring(name)) or "the current values"
+	notify(Library, ("Copied %s to the clipboard (%d chars)"):format(what, #text), "good")
+
+	return true, text
+end
+
+--==============================================================
 -- ui
 --==============================================================
 
@@ -3994,6 +4493,41 @@ function SaveManager:BuildConfigSection(tab)
 
 	self.Objects.AutoloadLabel = groupbox:AddLabel("Autoload: none")
 	self:UpdateAutoloadLabel()
+
+	-- Sharing. Export writes to the clipboard, import reads a field: setclipboard
+	-- is near-universal among executors and a working getclipboard is not, so the
+	-- paste has to be done by the user, in a box.
+	if groupbox.AddSection then
+		groupbox:AddSection("Share")
+	else
+		groupbox:AddDivider()
+	end
+
+	groupbox:AddButton({
+		Text = "Copy config",
+		Tooltip = "Copy the selected config, or the current values, as one shareable line",
+		Func = function()
+			self:CopyConfig(self:Selected())
+		end,
+	})
+
+	local shareInput = groupbox:AddInput(SHARE_INDEX, {
+		Text = "Shared string",
+		Placeholder = ("%s%d:"):format(SHARE_PREFIX, SHARE_VERSION),
+		-- A paste field the box empties the moment it is clicked would lose the
+		-- pasted string on the way to reading it back.
+		ClearTextOnFocus = false,
+		Tooltip = "Paste a config string someone sent you",
+	})
+	self.Objects.Share = shareInput
+
+	groupbox:AddButton({
+		Text = "Import",
+		Tooltip = "Apply the pasted string, saving it under the typed config name when there is one",
+		Func = function()
+			self:ImportConfig(shareInput and shareInput.Value, nameInput and nameInput.Value)
+		end,
+	})
 
 	return groupbox
 end
@@ -6783,6 +7317,139 @@ end
 return Dropdown
 end
 
+__modules["elements/Image"] = function()
+
+-- Sable :: elements/Image
+--
+-- The one element that shows something Sable did not draw: a hub banner, a
+-- diagram, a captured frame. It is framed exactly like a slider trough -- sunken
+-- fill, one hairline outline, one hairline of inset -- so an arbitrary bitmap
+-- lands inside the instrument rather than on top of it.
+--
+-- ScaleType defaults to Fit, which letterboxes rather than crops: an asset of
+-- unknown proportions is far more often information than decoration, and half a
+-- diagram is worse than a smaller one.
+--
+-- Registered in Library.Options so a hub can swap the asset live. Like
+-- ProgressBar it carries no persistent state: SaveManager's serialize() has no
+-- case for this type and returns nil, so it never reaches a config file.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local Image = {}
+
+-- Four rows tall by default: enough for an image to be an image, still short
+-- enough that one does not push every control below the fold.
+local DEFAULT_ROWS = 4
+
+-- How far a disabled image fades toward its background, as a share of the
+-- transparency it has left. Text goes FontFaint when disabled; a bitmap has no
+-- text colour to dim, and tinting it would be a colour Sable does not own.
+local DISABLED_FADE = 0.6
+
+function Image.New(Library, container, index, options)
+	options = options or {}
+
+	local element = Base.Create(Library, container, "Image", index, options)
+
+	local Sizes = Library.Sizes
+
+	local height = math.floor(tonumber(options.Height) or Sizes.RowHeight * DEFAULT_ROWS)
+	-- A panel shorter than a row is a hairline sandwich, not a picture.
+	height = math.max(height, Sizes.RowHeight)
+
+	-- An EnumItem or nothing. A string would have to be resolved by indexing
+	-- Enum.ScaleType, which THROWS on a typo rather than returning nil.
+	local scaleType = typeof(options.ScaleType) == "EnumItem" and options.ScaleType
+		or Enum.ScaleType.Fit
+
+	element.Value = options.Image ~= nil and tostring(options.Image) or ""
+	element.Transparency = Util.Clamp(tonumber(options.Transparency) or 0, 0, 1)
+
+	local row = Library:Row(container, height)
+	row.Name = "ImageRow"
+
+	element.Row = row
+	element.ExpandedSize = row.Size
+
+	local panel = Library:Panel({
+		Name = "Panel",
+		ClipsDescendants = true,
+		Size = UDim2.fromScale(1, 1),
+		Parent = row,
+	}, "PanelSunken", "Outline")
+	element.Panel = panel
+
+	-- One hairline of inset, so the bitmap never sits on the outline it is
+	-- framed by. The same inset the segmented track gives its cells.
+	Util.Padding(panel, Sizes.Outline)
+
+	local image = Library:Create("ImageLabel", {
+		Name = "Image",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Image = element.Value,
+		ImageTransparency = element.Transparency,
+		ScaleType = scaleType,
+		Size = UDim2.fromScale(1, 1),
+		Parent = panel,
+	})
+	element.ImageLabel = image
+
+	--- What is actually on screen: the caller's transparency, faded further while
+	--- the element is disabled. Display goes through this rather than writing
+	--- element.Transparency straight out, or a repaint mid-disable would quietly
+	--- un-fade the image.
+	local function shownTransparency()
+		local rest = element.Transparency
+		if element.Disabled then
+			return rest + (1 - rest) * DISABLED_FADE
+		end
+		return rest
+	end
+
+	function element:Display()
+		image.Image = self.Value
+		image.ImageTransparency = shownTransparency()
+		return self
+	end
+
+	--- The asset id IS the value, so this and :SetValue are the same operation
+	--- under two names -- :SetImage reads better at a call site, :SetValue keeps
+	--- the element contract.
+	function element:SetImage(asset, silent)
+		return self:SetValue(asset, silent)
+	end
+
+	function element:SetValue(value, silent)
+		self.Value = value ~= nil and tostring(value) or ""
+		self:Display()
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	function element:SetTransparency(value)
+		self.Transparency = Util.Clamp(tonumber(value) or 0, 0, 1)
+		return self:Display()
+	end
+
+	element.OnDisabledChanged = function()
+		image.ImageTransparency = shownTransparency()
+	end
+
+	element:Display()
+
+	return Base.Finish(element, Library.Options)
+end
+
+return Image
+end
+
 __modules["elements/Input"] = function()
 
 -- Sable :: elements/Input
@@ -7824,17 +8491,551 @@ end
 return Label
 end
 
+__modules["elements/Paragraph"] = function()
+
+-- Sable :: elements/Paragraph
+--
+-- A block of explanatory copy: instructions, a changelog, a warning. Title line
+-- in the element label voice, body underneath in FontDim at readout size.
+--
+-- The body keeps the caller's own casing. Every other piece of text in Sable is
+-- cased by FormatLabel or Chrome, but those are LABELS -- a sentence shouted in
+-- capitals is unreadable, and prose is the one thing here that is a sentence.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local Paragraph = {}
+
+-- Unbounded height for a wrapped measurement. TextService needs a finite box;
+-- this is "taller than any paragraph could ever be", not a layout metric.
+local MEASURE_HEIGHT = 4096
+
+function Paragraph.New(Library, container, title, body)
+	local element = Base.Create(Library, container, "Paragraph", nil, {
+		Text = title ~= nil and tostring(title) or "",
+	})
+
+	local Sizes = Library.Sizes
+	-- RowGap doubles as leading, so a line of text plus its gap is one line of
+	-- copy -- the same unit the readouts are spaced on.
+	local titleHeight = Sizes.Text + Sizes.RowGap
+	local lineHeight = Sizes.TextSmall + Sizes.RowGap
+
+	element.Body = body ~= nil and tostring(body) or ""
+
+	local row = Library:Row(container, titleHeight)
+	row.Name = "ParagraphRow"
+	-- The declared height above is a FLOOR once this is on; relayout keeps that
+	-- floor at the measured height so the groupbox is the right size on the very
+	-- first layout pass instead of sampling a one-line row and jumping.
+	row.AutomaticSize = Enum.AutomaticSize.Y
+
+	element.Row = row
+	element.ExpandedSize = row.Size
+	element.Value = element.Body
+
+	Library:Create("UIListLayout", {
+		Name = "List",
+		FillDirection = Enum.FillDirection.Vertical,
+		HorizontalAlignment = Enum.HorizontalAlignment.Left,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 0),
+		Parent = row,
+	})
+
+	local titleLabel = Library:Label({
+		Name = "Title",
+		LayoutOrder = 1,
+		Size = UDim2.new(1, 0, 0, titleHeight),
+		Text = Library:FormatLabel(element.Text),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Parent = row,
+	}, "Font")
+	element.Label = titleLabel
+
+	local bodyLabel = Library:Label({
+		Name = "Body",
+		LayoutOrder = 2,
+		-- Full row width, no declared height: the wrap decides how tall this is,
+		-- and AutomaticSize is the only thing that knows the real font metrics.
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		TextSize = Sizes.TextSmall,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Text = element.Body,
+		Parent = row,
+	}, "FontDim")
+	element.BodyLabel = bodyLabel
+
+	-- Width the floor was last measured against. The row's AbsoluteSize changes
+	-- when the row grows as well as when the column does, and remeasuring on our
+	-- own height change would be a loop; only a width change is news.
+	local measuredWidth = -1
+
+	local function relayout()
+		local width = math.floor(row.AbsoluteSize.X)
+		measuredWidth = width
+
+		local height = titleHeight
+
+		if element.Body ~= "" then
+			-- Bounded on purpose: the wrap is what decides the height, so the
+			-- available width has to go in. An unbounded reading is one long line.
+			local measured = width > 0
+					and Util.TextSize(
+						element.Body,
+						Sizes.TextSmall,
+						Library.Fonts.Label,
+						Vector2.new(width, MEASURE_HEIGHT)
+					)
+				or Util.TextSize(element.Body, Sizes.TextSmall, Library.Fonts.Label)
+
+			height += math.max(lineHeight, math.ceil(measured.Y) + Sizes.RowGap)
+		end
+
+		row.Size = UDim2.new(1, 0, 0, height)
+		element.ExpandedSize = row.Size
+	end
+
+	function element:Display()
+		titleLabel.Text = self.Library:FormatLabel(self.Text)
+		bodyLabel.Text = self.Body
+		self.Value = self.Body
+		relayout()
+		return self
+	end
+
+	-- Widens Base's one-argument SetText: a paragraph's two lines are almost
+	-- always rewritten together, and passing only a title must not silently
+	-- strand the old body under a new heading.
+	function element:SetText(newTitle, newBody)
+		self.Text = newTitle ~= nil and tostring(newTitle) or ""
+		if newBody ~= nil then
+			self.Body = tostring(newBody)
+		end
+		return self:Display()
+	end
+
+	function element:SetBody(newBody)
+		self.Body = newBody ~= nil and tostring(newBody) or ""
+		return self:Display()
+	end
+
+	--- The body is the paragraph's value: the title is a heading, the copy is
+	--- the content, and a script updating one line is updating that one.
+	function element:SetValue(value, silent)
+		self:SetBody(value)
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	-- The column is layout-driven, so the wrap -- and with it the row's floor --
+	-- changes whenever the window is resized.
+	Library:GiveSignal(row:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if Library.Unloaded or math.floor(row.AbsoluteSize.X) == measuredWidth then
+			return
+		end
+		relayout()
+	end))
+
+	relayout()
+
+	return Base.Finish(element, nil)
+end
+
+return Paragraph
+end
+
+__modules["elements/ProgressBar"] = function()
+
+-- Sable :: elements/ProgressBar
+--
+-- A read-only readout wearing the slider's clothes: same segmented track, same
+-- right-aligned monospace value. Farm progress, a cooldown, a health bar --
+-- anything the SCRIPT knows and the user only watches.
+--
+-- What makes it a readout rather than a control is everything it does not have:
+-- no hit button, no drag, no hover, and a value column that never brightens,
+-- because nothing the user does can move it. Sharing the track with Slider is
+-- deliberate (see elements/Track): one segmented bar, two meanings.
+--
+-- It is registered in Library.Options so a script can drive it by index, but it
+-- carries no persistent state -- SaveManager's serialize() has no case for this
+-- type and returns nil, so it never reaches a config file.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+local Track = require("elements/Track")
+
+local ProgressBar = {}
+
+-- Share of the row the label may claim before it starts squeezing the track,
+-- matching Slider: the same row shape has to hold the same proportions.
+local LABEL_SHARE = 0.45
+
+local ROUNDING_MAX = 6
+
+function ProgressBar.New(Library, container, index, options)
+	options = options or {}
+
+	local element = Base.Create(Library, container, "ProgressBar", index, options)
+
+	local Sizes = Library.Sizes
+	-- label <-> track <-> readout. Half a group pad is the library's inner gap
+	-- unit; Window.lua splits ColumnGap and GroupPad the same way.
+	local gap = math.ceil(Sizes.GroupPad / 2)
+
+	element.Min = tonumber(options.Min) or 0
+	element.Max = tonumber(options.Max) or 100
+	element.Rounding = math.floor(Util.Clamp(tonumber(options.Rounding) or 0, 0, ROUNDING_MAX))
+	-- Percent by default: a bar with no suffix reads as a bare number, and the
+	-- overwhelmingly common progress readout is a percentage.
+	element.Suffix = options.Suffix ~= nil and tostring(options.Suffix) or "%"
+	element.Segments = Track.Count(options.Segments, Sizes)
+	element.Value = element.Min
+
+	--==============================================================
+	-- visuals
+	--==============================================================
+
+	local row = Library:Row(container)
+	element.Row = row
+	element.ExpandedSize = row.Size
+
+	local label = Library:Label({
+		Name = "Label",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(0, 0, 1, 0),
+		Text = Library:FormatLabel(element.Text),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = row,
+	}, element.Risky and "Risk" or "Font")
+	element.Label = label
+
+	--- FontDim at rest, always. A slider's readout brightens while it is being
+	--- dragged; there is no drag here, so brightening would promise an
+	--- interaction that does not exist.
+	local function readoutKey()
+		return element.Disabled and "FontFaint" or "FontDim"
+	end
+
+	local readout = Library:Create("TextLabel", {
+		Name = "Readout",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(0, 0, 1, 0),
+		Font = Library.Fonts.Value,
+		TextSize = Sizes.TextSmall,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Text = "",
+		Theme = {
+			TextColor3 = function()
+				return Library:GetColor(readoutKey())
+			end,
+		},
+		Parent = row,
+	})
+
+	local bar = Track.New(Library, row, element.Segments)
+	local trough = bar.Trough
+	element.Bar = bar
+
+	--==============================================================
+	-- value math
+	--==============================================================
+
+	--- A Max below Min collapses to a single-value bar rather than dividing by a
+	--- negative span.
+	local function bounds()
+		local low = element.Min
+		local high = element.Max
+		if high < low then
+			high = low
+		end
+		return low, high
+	end
+
+	--- Util.FormatNumber's integer path evaluates math.floor(v - 0.5) for
+	--- negatives, which renders -5 as "-6". The decimal path (string.format) is
+	--- correct, so only the integer case is handled locally.
+	local function formatValue(value)
+		if element.Rounding <= 0 then
+			return tostring(math.floor(value + 0.5))
+		end
+		return Util.FormatNumber(value, element.Rounding)
+	end
+
+	local function normalize(value)
+		local low, high = bounds()
+		local number = tonumber(value)
+		if not number then
+			number = low
+		end
+		-- Clamp last: a bound that is off the rounding grid still has to be
+		-- reachable exactly.
+		return Util.Clamp(Util.Round(number, element.Rounding), low, high)
+	end
+
+	local function measure(text, textSize, font)
+		return math.ceil(Util.TextSize(text, textSize, font).X)
+	end
+
+	--==============================================================
+	-- layout
+	--==============================================================
+
+	--- The readout is sized for the widest value it can ever show, so the track
+	--- does not twitch as digits come and go.
+	local function relayout()
+		local low, high = bounds()
+		local readoutWidth = math.max(
+			measure(formatValue(low) .. element.Suffix, Sizes.TextSmall, Library.Fonts.Value),
+			measure(formatValue(high) .. element.Suffix, Sizes.TextSmall, Library.Fonts.Value)
+		) + Sizes.Outline * 2
+
+		readout.Size = UDim2.new(0, readoutWidth, 1, 0)
+
+		local labelWidth = measure(label.Text, Sizes.Text, Library.Fonts.Label) + Sizes.Outline
+
+		-- Capped against the LIVE row, not a fixed pixel budget, so the same cap
+		-- holds after the window is resized. Before the first layout pass the row
+		-- has no width yet and the measured label stands.
+		local available = row.AbsoluteSize.X
+		if available > 0 then
+			labelWidth = math.min(labelWidth, math.floor(available * LABEL_SHARE))
+		end
+
+		label.Size = UDim2.new(0, labelWidth, 1, 0)
+
+		local left = labelWidth > 0 and labelWidth + gap or 0
+		trough.Position = UDim2.new(0, left, 0.5, 0)
+		trough.Size = UDim2.new(1, -(left + gap + readoutWidth), 0, Sizes.Track)
+	end
+
+	--==============================================================
+	-- api
+	--==============================================================
+
+	function element:Display()
+		local low, high = bounds()
+		local alpha = high > low and Util.Alpha(self.Value, low, high) or 0
+
+		bar:Paint(alpha, self.Disabled and "AccentDim" or "Accent")
+
+		readout.Text = formatValue(self.Value) .. self.Suffix
+
+		return self
+	end
+
+	function element:SetValue(value, silent)
+		self.Value = normalize(value)
+		self:Display()
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	--- Shared tail of SetMin/SetMax: the readout may need a different width and
+	--- the current value may no longer be in range.
+	local function rebound()
+		relayout()
+
+		local clamped = normalize(element.Value)
+		if clamped ~= element.Value then
+			element:SetValue(clamped)
+		else
+			element:Display()
+		end
+	end
+
+	function element:SetMin(value)
+		self.Min = tonumber(value) or self.Min
+		rebound()
+		return self
+	end
+
+	function element:SetMax(value)
+		self.Max = tonumber(value) or self.Max
+		rebound()
+		return self
+	end
+
+	-- Overrides Base so the label column is re-measured when the text changes.
+	function element:SetText(text)
+		self.Text = text or ""
+		label.Text = self.Library:FormatLabel(self.Text)
+		relayout()
+		return self
+	end
+
+	element.OnDisabledChanged = function()
+		readout.TextColor3 = Library:GetColor(readoutKey())
+		element:Display()
+	end
+
+	--==============================================================
+	-- init
+	--==============================================================
+
+	-- The label cap is a share of the row, and the row is layout-driven, so the
+	-- columns have to be re-measured whenever the window changes width.
+	Library:GiveSignal(row:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if Library.Unloaded then
+			return
+		end
+		relayout()
+	end))
+
+	relayout()
+	element:SetValue(options.Default ~= nil and options.Default or 0, true)
+
+	return Base.Finish(element, Library.Options)
+end
+
+return ProgressBar
+end
+
+__modules["elements/Section"] = function()
+
+-- Sable :: elements/Section
+--
+-- A named break inside a long groupbox: chrome-cased caption on the left, a
+-- hairline running out to the right edge on the caption's centre line. It is
+-- the same interruption the groupbox header makes in the box outline, turned
+-- inward -- which is why the caption is Library:Chrome and not a label.
+--
+-- Deliberately taller than a control row. A section that is row-height reads as
+-- one more setting; the extra air is what makes it read as a divider with a
+-- name on it.
+
+local Util = require("Util")
+local Base = require("elements/Base")
+
+local Section = {}
+
+function Section.New(Library, container, text)
+	local element = Base.Create(Library, container, "Section", nil, {
+		Text = text ~= nil and tostring(text) or "",
+	})
+
+	local Sizes = Library.Sizes
+	-- Half a group pad is the library's inner gap unit; it separates the caption
+	-- from the rule the same way it separates a slider label from its track.
+	local gap = math.ceil(Sizes.GroupPad / 2)
+
+	local row = Library:Row(container, Sizes.RowHeight + Sizes.RowGap)
+	row.Name = "SectionRow"
+
+	element.Row = row
+	element.ExpandedSize = row.Size
+	element.Value = element.Text
+
+	local caption = Library:Label({
+		Name = "Caption",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(0, 0, 1, 0),
+		Font = Library.Fonts.Title,
+		Text = Library:Chrome(element.Text),
+		TextSize = Sizes.TextSmall,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = row,
+	}, "FontDim")
+	element.Label = caption
+
+	-- OutlineDim, matching Divider: a section separates, it does not frame.
+	local rule = Library:Create("Frame", {
+		Name = "Rule",
+		BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 0, Sizes.Outline),
+		Theme = { BackgroundColor3 = "OutlineDim" },
+		Parent = row,
+	})
+	element.Rule = rule
+
+	--- The rule starts where the caption ends, so the caption has to be measured.
+	--- It is the LABEL's text that is measured, never element.Text: Library:Chrome
+	--- interleaves spaces, so the rendered string is roughly twice as wide as the
+	--- one the caller passed in.
+	local function relayout()
+		local width = 0
+		if caption.Text ~= "" then
+			width = math.ceil(Util.TextSize(caption.Text, Sizes.TextSmall, Library.Fonts.Title).X)
+		end
+
+		caption.Size = UDim2.new(0, width, 1, 0)
+
+		local left = width > 0 and width + gap or 0
+		rule.Position = UDim2.new(0, left, 0.5, 0)
+		rule.Size = UDim2.new(1, -left, 0, Sizes.Outline)
+	end
+
+	function element:Display()
+		self.Value = self.Text
+		return self
+	end
+
+	-- Overrides Base: the caption is chrome rather than a label, and the rule has
+	-- to be re-measured against the new text or it starts under or short of it.
+	function element:SetText(newText)
+		self.Text = newText ~= nil and tostring(newText) or ""
+		caption.Text = self.Library:Chrome(self.Text)
+		relayout()
+		return self:Display()
+	end
+
+	--- A section holds no state; this exists so it answers the same
+	--- :SetValue(value, silent) contract every other element does.
+	function element:SetValue(value, silent)
+		self:SetText(value)
+
+		if not silent then
+			self:Fire()
+		end
+
+		return self
+	end
+
+	relayout()
+
+	return Base.Finish(element, nil)
+end
+
+return Section
+end
+
 __modules["elements/Slider"] = function()
 
 -- Sable :: elements/Slider
 --
 -- The segmented instrument slider. The track is a fixed number of equal-width
 -- cells that light up as the value rises -- nothing ever resizes, which is what
--- separates a piece of equipment from a progress bar. The right-hand readout
--- carries the exact value, because 16 cells cannot.
+-- makes it read as equipment rather than as a loading bar. The right-hand
+-- readout carries the exact value, because 16 cells cannot.
+--
+-- The bar itself is elements/Track, shared with ProgressBar. Everything wrapped
+-- around it here -- the hit target, the drag, the readout that brightens while
+-- it is held -- is what makes this one a control and that one a readout.
 
 local Util = require("Util")
 local Base = require("elements/Base")
+local Track = require("elements/Track")
 
 local Slider = {}
 
@@ -7843,7 +9044,6 @@ local Slider = {}
 -- is resized, so a fixed cap would be wrong at every size but one.
 local LABEL_SHARE = 0.45
 
-local SEGMENT_MAX = 64
 local ROUNDING_MAX = 6
 
 function Slider.New(Library, container, index, options)
@@ -7855,17 +9055,13 @@ function Slider.New(Library, container, index, options)
 	-- label <-> track <-> readout. Half a group pad is the library's inner gap
 	-- unit; Window.lua splits ColumnGap and GroupPad the same way.
 	local gap = math.ceil(Sizes.GroupPad / 2)
-	-- One hairline of gutter between cells, so the segmentation reads as cuts in
-	-- a bar rather than as separate blocks.
-	local cellGap = Sizes.Outline
 
 	element.Min = tonumber(options.Min) or 0
 	element.Max = tonumber(options.Max) or 100
 	element.Rounding = math.floor(Util.Clamp(tonumber(options.Rounding) or 0, 0, ROUNDING_MAX))
 	element.Suffix = tostring(options.Suffix or "")
 	element.Compact = options.Compact == true
-	element.Segments =
-		math.floor(Util.Clamp(tonumber(options.Segments) or Sizes.Segments, 1, SEGMENT_MAX))
+	element.Segments = Track.Count(options.Segments, Sizes)
 	element.Value = element.Min
 
 	--==============================================================
@@ -7919,61 +9115,10 @@ function Slider.New(Library, container, index, options)
 		Parent = row,
 	})
 
-	local trough = Library:Panel({
-		Name = "Track",
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 0, 0.5, 0),
-		Size = UDim2.new(1, 0, 0, Sizes.Track),
-		Parent = row,
-	}, "PanelSunken", "Outline")
-
-	-- The cells live one level down so the trough's inset does not also shrink
-	-- the hit button, which needs to cover the whole trough (and then some).
-	local cells = Library:Create("Frame", {
-		Name = "Cells",
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Size = UDim2.fromScale(1, 1),
-		Parent = trough,
-	})
-
-	-- No right padding: the trailing cell's own gutter supplies it, so the
-	-- inset reads as one hairline on both ends.
-	Util.Padding(cells, Sizes.Outline, 0, Sizes.Outline, Sizes.Outline)
-
-	Library:Create("UIListLayout", {
-		Name = "List",
-		FillDirection = Enum.FillDirection.Horizontal,
-		HorizontalAlignment = Enum.HorizontalAlignment.Left,
-		VerticalAlignment = Enum.VerticalAlignment.Center,
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, cellGap),
-		Parent = cells,
-	})
-
-	local segments = table.create(element.Segments)
-	local cellWidth = 1 / element.Segments
-
-	for cellIndex = 1, element.Segments do
-		-- Each cell carries its own scheme KEY, never a baked Color3, so a live
-		-- theme change repaints filled and empty cells correctly.
-		local record = { Key = "PanelSunken" }
-
-		record.Frame = Library:Create("Frame", {
-			Name = ("Cell%02d"):format(cellIndex),
-			BorderSizePixel = 0,
-			Size = UDim2.new(cellWidth, -cellGap, 1, 0),
-			LayoutOrder = cellIndex,
-			Theme = {
-				BackgroundColor3 = function()
-					return Library:GetColor(record.Key)
-				end,
-			},
-			Parent = cells,
-		})
-
-		segments[cellIndex] = record
-	end
+	-- The segmented bar itself is shared with ProgressBar; see elements/Track.
+	local bar = Track.New(Library, row, element.Segments)
+	local trough = bar.Trough
+	element.Bar = bar
 
 	-- Taller and wider than the trough: a Track-tall grab target is a nuisance,
 	-- so the hit area is grown out to the full row height plus a gap of overhang
@@ -8079,21 +9224,7 @@ function Slider.New(Library, container, index, options)
 		local low, high = bounds()
 		local alpha = high > low and Util.Alpha(self.Value, low, high) or 0
 
-		-- Crossing into a cell lights it: any value above Min shows at least one.
-		local filled = 0
-		if alpha > 0 then
-			filled = math.max(1, math.ceil(alpha * self.Segments - 1e-4))
-		end
-
-		local fillKey = self.Disabled and "AccentDim" or "Accent"
-
-		for cellIndex, record in segments do
-			local key = cellIndex <= filled and fillKey or "PanelSunken"
-			if record.Key ~= key then
-				record.Key = key
-				record.Frame.BackgroundColor3 = Library:GetColor(key)
-			end
-		end
+		bar:Paint(alpha, self.Disabled and "AccentDim" or "Accent")
 
 		readout.Text = formatValue(self.Value) .. self.Suffix
 
@@ -8461,6 +9592,138 @@ end
 return Toggle
 end
 
+__modules["elements/Track"] = function()
+
+-- Sable :: elements/Track
+--
+-- The segmented instrument bar, shared by Slider and ProgressBar. It is the
+-- library's signature control surface, so there is exactly one of it: a fixed
+-- number of equal-width cells that light up as a fraction rises. Cells are
+-- RECOLOURED and never resized -- a bar that grows is a progress meter, a bar
+-- whose cells change state is an instrument.
+--
+-- This is a helper, not an element: it has no row, no store entry and no value.
+-- The owning element positions Track.Trough and calls :Paint each time its
+-- value changes.
+
+local Util = require("Util")
+
+local Track = {}
+
+-- More cells than this and each one is thinner than its own gutter, which reads
+-- as a smear rather than as segmentation.
+local SEGMENT_MAX = 64
+
+--- Folds a requested segment count into the range a bar can actually draw.
+function Track.Count(requested, Sizes)
+	return math.floor(Util.Clamp(tonumber(requested) or Sizes.Segments, 1, SEGMENT_MAX))
+end
+
+--- Builds the trough and its cells inside `parent`. The caller owns the
+--- trough's position and width; only its height is fixed here, because the
+--- cells are sized in scale against it.
+function Track.New(Library, parent, count)
+	local Sizes = Library.Sizes
+	-- One hairline of gutter between cells, so the segmentation reads as cuts in
+	-- a bar rather than as separate blocks.
+	local cellGap = Sizes.Outline
+
+	local trough = Library:Panel({
+		Name = "Track",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 0, Sizes.Track),
+		Parent = parent,
+	}, "PanelSunken", "Outline")
+
+	-- The cells live one level down so the trough's inset does not also shrink
+	-- anything the owner lays over the trough -- a Slider's hit button covers the
+	-- whole trough and then some.
+	local cells = Library:Create("Frame", {
+		Name = "Cells",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1),
+		Parent = trough,
+	})
+
+	-- No right padding: the trailing cell's own gutter supplies it, so the
+	-- inset reads as one hairline on both ends.
+	Util.Padding(cells, Sizes.Outline, 0, Sizes.Outline, Sizes.Outline)
+
+	Library:Create("UIListLayout", {
+		Name = "List",
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Left,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, cellGap),
+		Parent = cells,
+	})
+
+	local segments = table.create(count)
+	local cellWidth = 1 / count
+
+	for cellIndex = 1, count do
+		-- Each cell carries its own scheme KEY, never a baked Color3, so a live
+		-- theme change repaints filled and empty cells correctly.
+		local record = { Key = "PanelSunken" }
+
+		record.Frame = Library:Create("Frame", {
+			Name = ("Cell%02d"):format(cellIndex),
+			BorderSizePixel = 0,
+			Size = UDim2.new(cellWidth, -cellGap, 1, 0),
+			LayoutOrder = cellIndex,
+			Theme = {
+				BackgroundColor3 = function()
+					return Library:GetColor(record.Key)
+				end,
+			},
+			Parent = cells,
+		})
+
+		segments[cellIndex] = record
+	end
+
+	local bar = {
+		Trough = trough,
+		Cells = cells,
+		Count = count,
+		Segments = segments,
+	}
+
+	--- How many cells a 0..1 fraction lights. Crossing into a cell lights it, so
+	--- any fraction above zero shows at least one -- a bar that reads empty at 1%
+	--- is indistinguishable from a bar that is off.
+	function bar:Filled(alpha)
+		if alpha <= 0 then
+			return 0
+		end
+		return math.max(1, math.min(self.Count, math.ceil(alpha * self.Count - 1e-4)))
+	end
+
+	--- Recolours the cells for `alpha`, writing only the ones that changed.
+	--- Returns the filled count.
+	function bar:Paint(alpha, fillKey)
+		local filled = self:Filled(alpha)
+
+		for cellIndex, record in self.Segments do
+			local key = cellIndex <= filled and fillKey or "PanelSunken"
+			if record.Key ~= key then
+				record.Key = key
+				record.Frame.BackgroundColor3 = Library:GetColor(key)
+			end
+		end
+
+		return filled
+	end
+
+	return bar
+end
+
+return Track
+end
+
 __modules["elements/init"] = function()
 
 -- Sable :: elements/init
@@ -8474,12 +9737,16 @@ local Base = require("elements/Base")
 local Label = require("elements/Label")
 local Button = require("elements/Button")
 local Divider = require("elements/Divider")
+local Section = require("elements/Section")
+local Paragraph = require("elements/Paragraph")
 local Toggle = require("elements/Toggle")
 local Slider = require("elements/Slider")
+local ProgressBar = require("elements/ProgressBar")
 local Input = require("elements/Input")
 local Dropdown = require("elements/Dropdown")
 local ColorPicker = require("elements/ColorPicker")
 local KeyPicker = require("elements/KeyPicker")
+local Image = require("elements/Image")
 
 local Elements = {}
 
@@ -8487,12 +9754,16 @@ Elements.Modules = {
 	Label = Label,
 	Button = Button,
 	Divider = Divider,
+	Section = Section,
+	Paragraph = Paragraph,
 	Toggle = Toggle,
 	Slider = Slider,
+	ProgressBar = ProgressBar,
 	Input = Input,
 	Dropdown = Dropdown,
 	ColorPicker = ColorPicker,
 	KeyPicker = KeyPicker,
+	Image = Image,
 }
 
 --- `Container` is the shared __index table used by groupboxes, tabbox tabs and
@@ -8510,12 +9781,24 @@ function Elements.Install(Library, Container)
 		return Divider.New(Library, self)
 	end
 
+	function Container:AddSection(text)
+		return Section.New(Library, self, text)
+	end
+
+	function Container:AddParagraph(title, body)
+		return Paragraph.New(Library, self, title, body)
+	end
+
 	function Container:AddToggle(index, options)
 		return Toggle.New(Library, self, index, options)
 	end
 
 	function Container:AddSlider(index, options)
 		return Slider.New(Library, self, index, options)
+	end
+
+	function Container:AddProgressBar(index, options)
+		return ProgressBar.New(Library, self, index, options)
 	end
 
 	function Container:AddInput(index, options)
@@ -8532,6 +9815,10 @@ function Elements.Install(Library, Container)
 
 	function Container:AddKeyPicker(index, options)
 		return KeyPicker.New(Library, self, index, options)
+	end
+
+	function Container:AddImage(index, options)
+		return Image.New(Library, self, index, options)
 	end
 
 	-- Inline pickers live in an element's `Right` slot, left of its own control.
@@ -8575,7 +9862,7 @@ local Library = {
 }
 
 Library.Name = "Sable"
-Library.Version = "1.1.0"
+Library.Version = "1.2.0"
 Library.Util = Util
 Library.Signal = Signal
 

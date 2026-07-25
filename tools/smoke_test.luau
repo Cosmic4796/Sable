@@ -45,6 +45,12 @@ end)), "validation is rejecting real properties")
 check("mock REJECTS an invalid enum member", not (pcall(function()
 	return Enum.KeyCode.NotARealKey
 end)), "enum validation is not active")
+check(
+	"mock compares UDim2 by VALUE",
+	UDim2.new(1, 2, 3, 4) == UDim2.new(1, 2, 3, 4),
+	"identity comparison would make every `a.Size ~= b.Size` a false pass"
+)
+check("mock still tells two UDim2s apart", UDim2.new(1, 2, 3, 4) ~= UDim2.new(1, 2, 3, 5))
 
 check("library loaded", type(Library) == "table")
 check("version present", type(Library.Version) == "string")
@@ -160,6 +166,26 @@ step("options with NO optional keys", function()
 	Right:AddInput("BareInput", {})
 end)
 
+local SectionEl, ParagraphEl
+step("AddSection", function()
+	SectionEl = Left:AddSection("Targeting")
+end)
+step("AddParagraph", function()
+	ParagraphEl = Left:AddParagraph("Notes", "Short body.")
+end)
+step("AddProgressBar", function()
+	Left:AddProgressBar("Farm", { Text = "Farm progress", Default = 0, Min = 0, Max = 100, Suffix = "%" })
+end)
+step("AddImage", function()
+	Right:AddImage("Banner", { Image = "rbxassetid://1234567", Height = 80, Tooltip = "hub banner" })
+end)
+step("read-only elements with NO optional keys", function()
+	Right:AddSection()
+	Right:AddParagraph("Bare")
+	Right:AddProgressBar("BareBar", {})
+	Right:AddImage("BareImage", {})
+end)
+
 step("tabbox", function()
 	local tb = Tabs.Visuals:AddLeftTabbox()
 	local a = tb:AddTab("One")
@@ -262,6 +288,199 @@ step("SetVisible / SetDisabled / SetText", function()
 	T.Risky:SetDisabled(true)
 	T.Risky:SetDisabled(false)
 	T.Risky:SetText("Renamed")
+end)
+
+--==============================================================
+-- read-only elements
+--==============================================================
+
+--- Segments actually painted with the accent, read off the cell frames rather
+--- than off any bookkeeping the element keeps. A bar that stops repainting has
+--- to FAIL here, not pass because its own counter is still correct.
+local function litSegments(element)
+	local accent = Library:GetColor("Accent")
+	local lit = 0
+	for _, record in element.Bar.Segments do
+		if record.Frame.BackgroundColor3 == accent then
+			lit += 1
+		end
+	end
+	return lit
+end
+
+check("progress bar in Options", O.Farm ~= nil)
+check("progress bar has no hit target", O.Farm and O.Farm.Hit == nil, "a ProgressBar must not be draggable")
+check("progress bar starts empty", O.Farm and litSegments(O.Farm) == 0, O.Farm and litSegments(O.Farm))
+-- Slider shares the same track implementation, so it has to keep painting.
+check("slider still lights its own track", litSegments(O.Smooth) > 0, litSegments(O.Smooth))
+
+step("progress bar clamps above Max", function()
+	O.Farm:SetValue(9999)
+end)
+check("progress clamped to Max", O.Farm.Value == 100, O.Farm.Value)
+check("a full bar lights every segment", litSegments(O.Farm) == O.Farm.Segments, litSegments(O.Farm))
+
+step("progress bar clamps below Min", function()
+	O.Farm:SetValue(-9999)
+end)
+check("progress clamped to Min", O.Farm.Value == 0, O.Farm.Value)
+check("an empty bar lights nothing", litSegments(O.Farm) == 0, litSegments(O.Farm))
+
+step("progress bar tracks the value", function()
+	O.Farm:SetValue(50)
+end)
+check("half a bar is half lit", litSegments(O.Farm) == O.Farm.Segments / 2, litSegments(O.Farm))
+step("one point of progress lights one cell", function()
+	O.Farm:SetValue(1)
+end)
+check("a barely-started bar is not empty", litSegments(O.Farm) == 1, litSegments(O.Farm))
+check("the readout carries the exact value", O.Farm.Row:FindFirstChild("Readout").Text == "1%", O.Farm.Row:FindFirstChild("Readout").Text)
+
+step("progress bar SetMax re-clamps", function()
+	O.Farm:SetValue(100)
+	O.Farm:SetMax(50)
+end)
+check("value clamped by the new Max", O.Farm.Value == 50, O.Farm.Value)
+check("bar full at the new Max", litSegments(O.Farm) == O.Farm.Segments, litSegments(O.Farm))
+step("progress bar SetMin re-clamps", function()
+	O.Farm:SetMin(60)
+end)
+check("value pulled up to the new Min", O.Farm.Value == 60, O.Farm.Value)
+step("progress bar bounds restored", function()
+	O.Farm:SetMin(0)
+	O.Farm:SetMax(100)
+	O.Farm:SetValue(40)
+end)
+
+-- FontDim at rest and never anything brighter. A slider's readout lifts to Font
+-- while it is being dragged; there is no drag here, so a readout that brightened
+-- would promise an interaction that does not exist. The only other colour it may
+-- ever take is the disabled one.
+local farmReadout = O.Farm.Row:FindFirstChild("Readout")
+check("the readout is dim at rest", farmReadout.TextColor3 == Library:GetColor("FontDim"), tostring(farmReadout.TextColor3))
+step("a disabled progress bar dims further, then comes back", function()
+	O.Farm:SetDisabled(true)
+	check("disabled readout goes faint", farmReadout.TextColor3 == Library:GetColor("FontFaint"), tostring(farmReadout.TextColor3))
+	O.Farm:SetDisabled(false)
+	check("re-enabled readout is dim again", farmReadout.TextColor3 == Library:GetColor("FontDim"), tostring(farmReadout.TextColor3))
+end)
+
+-- Percent is the documented default, because the overwhelmingly common progress
+-- readout is one. A bar built with no options at all still has to say so.
+check(
+	"a bare progress bar reads as a percentage",
+	O.BareBar.Row:FindFirstChild("Readout").Text == "0%",
+	O.BareBar.Row:FindFirstChild("Readout").Text
+)
+
+-- A caller's typo must never reach table.create: a requested segment count is
+-- folded into the range a bar can actually draw, not trusted.
+step("silly segment counts are folded into range", function()
+	local none = Left:AddProgressBar("SegNone", { Text = "s", Segments = 0 })
+	local many = Left:AddProgressBar("SegMany", { Text = "s", Segments = 200 })
+	check("a zero segment count still draws one cell", none.Segments == 1 and #none.Bar.Segments == 1, none.Segments)
+	check("an absurd segment count is capped", many.Segments == 64 and #many.Bar.Segments == 64, many.Segments)
+	none:Destroy()
+	many:Destroy()
+end)
+
+check("section is not stored", O.Targeting == nil and T.Targeting == nil)
+step("section re-measures on SetText", function()
+	local before = SectionEl.Rule.Position.X.Offset
+	check("the rule starts after the caption", before > 0, before)
+	check("the rule fills the rest of the row", SectionEl.Rule.Size.X.Offset == -before, SectionEl.Rule.Size.X.Offset)
+
+	-- Measured independently, from the string that is actually RENDERED.
+	-- Library:Chrome interleaves spaces, so the caption on screen is about twice
+	-- the width of the text the caller passed in; measuring the caller's string
+	-- would start the rule underneath its own caption, and every assertion above
+	-- would still hold.
+	local rendered = math.ceil(Library.Util.TextSize(SectionEl.Label.Text, Library.Sizes.TextSmall, Library.Fonts.Title).X)
+	check("the caption column fits the letterspaced text", SectionEl.Label.Size.X.Offset >= rendered, ("%d < %d"):format(SectionEl.Label.Size.X.Offset, rendered))
+	check("the rule starts clear of the rendered caption", before >= rendered, ("%d < %d"):format(before, rendered))
+
+	SectionEl:SetText("A considerably longer section caption")
+	local after = SectionEl.Rule.Position.X.Offset
+	check("a longer caption pushes the rule right", after > before, ("%d -> %d"):format(before, after))
+	check("the rule shrank to match", SectionEl.Rule.Size.X.Offset == -after, SectionEl.Rule.Size.X.Offset)
+
+	SectionEl:SetText("Targeting")
+	check("and it measures back down again", SectionEl.Rule.Position.X.Offset == before, SectionEl.Rule.Position.X.Offset)
+end)
+
+check("paragraph title is cased like a label", ParagraphEl.Label.Text == "NOTES", ParagraphEl.Label.Text)
+check("paragraph body keeps its own casing", ParagraphEl.BodyLabel.Text == "Short body.", ParagraphEl.BodyLabel.Text)
+check("paragraph body wraps", ParagraphEl.BodyLabel.TextWrapped == true)
+check("paragraph row auto-sizes", ParagraphEl.Row.AutomaticSize == Enum.AutomaticSize.Y)
+
+step("a paragraph reflows on text and on width", function()
+	local short = ParagraphEl.Row.Size.Y.Offset
+
+	ParagraphEl:SetBody(("A sentence of explanatory copy that keeps going. "):rep(6))
+	local wide = ParagraphEl.Row.Size.Y.Offset
+	check("the row grew with the copy", wide > short, ("%d -> %d"):format(short, wide))
+
+	-- Same copy, less than half the column: the wrap must produce a taller row.
+	ParagraphEl.Row.AbsoluteSize = Vector2.new(120, 20)
+	local narrow = ParagraphEl.Row.Size.Y.Offset
+	check("a narrower column means a taller paragraph", narrow > wide, ("%d -> %d"):format(wide, narrow))
+
+	ParagraphEl.Row.AbsoluteSize = Vector2.new(300, 20)
+	check("widening the column reflows it back", ParagraphEl.Row.Size.Y.Offset == wide, ParagraphEl.Row.Size.Y.Offset)
+
+	ParagraphEl:SetBody("Short body.")
+	check("shorter copy shrinks the row again", ParagraphEl.Row.Size.Y.Offset == short, ParagraphEl.Row.Size.Y.Offset)
+	-- The constructor writes the body straight onto the label; every LATER write
+	-- goes through Display, which is the path that could quietly start casing it.
+	check("a rewritten body still keeps its own casing", ParagraphEl.BodyLabel.Text == "Short body.", ParagraphEl.BodyLabel.Text)
+end)
+
+step("paragraph SetText rewrites both lines", function()
+	ParagraphEl:SetText("Changelog", "v1.1 -- first public build")
+end)
+check("paragraph title updated", ParagraphEl.Label.Text == "CHANGELOG", ParagraphEl.Label.Text)
+check("paragraph body updated", ParagraphEl.Value == "v1.1 -- first public build", ParagraphEl.Value)
+check("the body LABEL keeps the caller's casing", ParagraphEl.BodyLabel.Text == "v1.1 -- first public build", ParagraphEl.BodyLabel.Text)
+step("paragraph SetText with only a title keeps the body", function()
+	ParagraphEl:SetText("Notes")
+end)
+check("body survived a title-only edit", ParagraphEl.Value == "v1.1 -- first public build", ParagraphEl.Value)
+check("paragraph is not stored", O.Notes == nil and T.Notes == nil)
+
+check("image in Options", O.Banner ~= nil)
+check("image value is the asset id", O.Banner and O.Banner.Value == "rbxassetid://1234567", O.Banner and O.Banner.Value)
+check("image defaults to Fit", O.Banner and O.Banner.ImageLabel.ScaleType == Enum.ScaleType.Fit)
+check("image row honours Height", O.Banner and O.Banner.Row.Size.Y.Offset == 80, O.Banner and O.Banner.Row.Size.Y.Offset)
+
+step("SetImage swaps the asset live", function()
+	O.Banner:SetImage("rbxassetid://7654321")
+end)
+check("image value updated", O.Banner.Value == "rbxassetid://7654321", O.Banner.Value)
+check("the ImageLabel actually changed", O.Banner.ImageLabel.Image == "rbxassetid://7654321", O.Banner.ImageLabel.Image)
+step("image round-trips through SetValue", function()
+	O.Banner:SetValue("rbxassetid://1234567")
+end)
+check("image value restored", O.Banner.Value == "rbxassetid://1234567", O.Banner.Value)
+check("the ImageLabel followed it back", O.Banner.ImageLabel.Image == "rbxassetid://1234567", O.Banner.ImageLabel.Image)
+
+step("SetTransparency reaches the ImageLabel", function()
+	O.Banner:SetTransparency(0.5)
+	check("transparency reached the bitmap", math.abs(O.Banner.ImageLabel.ImageTransparency - 0.5) < 1e-6, O.Banner.ImageLabel.ImageTransparency)
+	O.Banner:SetTransparency(0)
+	check("and back to opaque", O.Banner.ImageLabel.ImageTransparency == 0, O.Banner.ImageLabel.ImageTransparency)
+end)
+
+step("a disabled image fades, and a repaint does not undo it", function()
+	local rest = O.Banner.ImageLabel.ImageTransparency
+
+	O.Banner:SetDisabled(true)
+	check("disabled image faded", O.Banner.ImageLabel.ImageTransparency > rest, O.Banner.ImageLabel.ImageTransparency)
+
+	O.Banner:SetImage("rbxassetid://1234567")
+	check("still faded after a repaint", O.Banner.ImageLabel.ImageTransparency > rest, O.Banner.ImageLabel.ImageTransparency)
+
+	O.Banner:SetDisabled(false)
+	check("re-enabling restores it", O.Banner.ImageLabel.ImageTransparency == rest, O.Banner.ImageLabel.ImageTransparency)
 end)
 
 --==============================================================
@@ -1082,6 +1301,10 @@ step("seed state", function()
 	O.Col:SetValue(Color3.fromRGB(12, 34, 56))
 	O.Bind:SetValue("MB2")
 	T.Bare:SetValue(true)
+	-- Runtime-only elements. Both live in Options, so only serialize() dropping
+	-- their type keeps them out of the file below.
+	O.Farm:SetValue(77)
+	O.Banner:SetImage("rbxassetid://999")
 end)
 
 step("Save config", function()
@@ -1100,6 +1323,8 @@ step("clobber state", function()
 	O.Col:SetValue(Color3.fromRGB(200, 200, 200))
 	O.Bind:SetValue("K")
 	T.Bare:SetValue(false)
+	O.Farm:SetValue(0)
+	O.Banner:SetImage("rbxassetid://111")
 end)
 
 step("Load config", function()
@@ -1120,6 +1345,15 @@ check(
 check("RT colorpicker", math.abs(O.Col.Value.R - 12 / 255) < 0.01, tostring(O.Col.Value))
 check("RT keypicker", O.Bind.Value == "MB2", tostring(O.Bind.Value))
 check("ignored index NOT restored", T.Bare.Value == false, "SetIgnoreIndexes did not exclude 'Bare'")
+
+-- Progress and images are runtime state, not settings. serialize() has no case
+-- for either type, so Collect() drops them and Apply() has nothing to restore.
+local savedConfig = Library.Util.FS.Read("SableSmoke/game/settings/smoke.json") or ""
+check("config file was written", #savedConfig > 0)
+check("progress bar never reached the file", savedConfig:find("Farm", 1, true) == nil, savedConfig:sub(1, 160))
+check("image never reached the file", savedConfig:find("Banner", 1, true) == nil, savedConfig:sub(1, 160))
+check("progress bar NOT restored by a load", O.Farm.Value == 0, O.Farm.Value)
+check("image NOT restored by a load", O.Banner.Value == "rbxassetid://111", O.Banner.Value)
 
 -- The empty multi-select set: JSONEncode turns {} into "[]", which decodes as
 -- an array. If that is not handled, the value comes back the wrong shape.
@@ -1152,6 +1386,539 @@ step("load missing config degrades", function()
 end)
 step("LoadAutoloadConfig with none set", function()
 	Library.SaveManager:LoadAutoloadConfig()
+end)
+
+--==============================================================
+-- shareable configs
+--==============================================================
+
+local SM = Library.SaveManager
+
+-- Deliberately different from every value the file round-trip above used, so a
+-- stale element cannot pass this section by accident.
+step("seed share state", function()
+	T.Enabled:SetValue(true)
+	O.Fov:SetValue(287)
+	O.Smooth:SetValue(0.73)
+	-- Config strings travel through base64 as BYTES; non-ASCII has to survive.
+	O.Name:SetValue("shared \u{00e9}\u{4e2d}\u{6587}")
+	-- Bone's value list was narrowed to { Head, Root } earlier in this file.
+	O.Bone:SetValue("Root")
+	O.Parts:SetValue({ Torso = true, Arms = true })
+	O.Col:SetValue(Color3.fromRGB(9, 180, 231))
+	O.ColA:SetValue(Color3.fromRGB(3, 4, 5))
+	O.ColA:SetTransparency(0.5)
+	O.Bind:SetValue({ "MB3", "Hold" })
+	O.Farm:SetValue(64)
+	O.Banner:SetImage("rbxassetid://424242")
+	T.Bare:SetValue(true)
+end)
+drain()
+
+local shared
+step("ExportConfig of the live state", function()
+	local text, reason = SM:ExportConfig()
+	shared = text
+	check("export produced a string", type(text) == "string", reason)
+end)
+
+shared = type(shared) == "string" and shared or ""
+check("share string is a single line", shared:find("[\r\n]") == nil)
+check("share string carries the versioned prefix", shared:sub(1, 7) == "SABLE1:", shared:sub(1, 16))
+check("share string is paste-safe", shared:match("^SABLE1:[A-Za-z0-9%+/=]+$") ~= nil, shared:sub(1, 48))
+
+-- Compression is only worth carrying if it actually pays. Base64 alone costs
+-- 4 characters per 3 bytes, so a shared string SHORTER than the raw JSON it
+-- carries can only mean the compressor ran and won.
+local liveJson = __jsonEncode({ version = 1, objects = SM:Collect() })
+check("compression beat plain JSON", #shared < #liveJson, ("%d chars vs %d of JSON"):format(#shared, #liveJson))
+
+local decodedShare, decodeReason = SM:DecodeConfig(shared)
+check("DecodeConfig returns the payload", type(decodedShare) == "table", decodeReason)
+check(
+	"decoded payload carries objects",
+	type(decodedShare) == "table" and type(decodedShare.objects) == "table",
+	decodeReason
+)
+
+local sharedTypes = {}
+if type(decodedShare) == "table" and type(decodedShare.objects) == "table" then
+	for _, entry in decodedShare.objects do
+		if type(entry) == "table" then
+			sharedTypes[tostring(entry.idx)] = tostring(entry.type)
+		end
+	end
+end
+check("shared payload carries the toggle", sharedTypes.Enabled == "Toggle", sharedTypes.Enabled)
+check("progress bar never entered a shared string", sharedTypes.Farm == nil, sharedTypes.Farm)
+check("image never entered a shared string", sharedTypes.Banner == nil, sharedTypes.Banner)
+check("the paste box never enters a shared string", sharedTypes.SaveManager_ConfigShare == nil)
+check("ignored index never entered a shared string", sharedTypes.Bare == nil)
+
+step("clobber every shared value", function()
+	T.Enabled:SetValue(false)
+	O.Fov:SetValue(3)
+	O.Smooth:SetValue(0.01)
+	O.Name:SetValue("clobbered")
+	O.Bone:SetValue("Head")
+	O.Parts:SetValue({ Head = true })
+	O.Col:SetValue(Color3.fromRGB(200, 200, 200))
+	O.ColA:SetValue(Color3.fromRGB(250, 250, 250))
+	O.ColA:SetTransparency(0)
+	O.Bind:SetValue({ "K", "Toggle" })
+	O.Farm:SetValue(0)
+	O.Banner:SetImage("rbxassetid://111")
+	-- Ignored, so the import must leave it exactly here.
+	T.Bare:SetValue(false)
+end)
+drain()
+
+local importedOk
+step("ImportConfig applies the string", function()
+	importedOk = SM:ImportConfig(shared)
+end)
+drain()
+
+check("import reported success", importedOk == true)
+check("share RT toggle", T.Enabled.Value == true, tostring(T.Enabled.Value))
+check("share RT slider int", O.Fov.Value == 287, tostring(O.Fov.Value))
+check("share RT slider decimal", math.abs(O.Smooth.Value - 0.73) < 1e-6, tostring(O.Smooth.Value))
+check("share RT input keeps non-ASCII", O.Name.Value == "shared \u{00e9}\u{4e2d}\u{6587}", O.Name.Value)
+check("share RT dropdown single", O.Bone.Value == "Root", tostring(O.Bone.Value))
+check(
+	"share RT dropdown multi",
+	type(O.Parts.Value) == "table" and O.Parts.Value.Torso == true and O.Parts.Value.Arms == true and O.Parts.Value.Head == nil,
+	type(O.Parts.Value) == "table" and __jsonEncode(O.Parts.Value) or type(O.Parts.Value)
+)
+check("share RT colorpicker", math.abs(O.Col.Value.G - 180 / 255) < 0.01, tostring(O.Col.Value))
+check("share RT colorpicker transparency", math.abs(O.ColA.Transparency - 0.5) < 1e-6, tostring(O.ColA.Transparency))
+check("share RT keypicker key", O.Bind.Value == "MB3", tostring(O.Bind.Value))
+check("share RT keypicker mode", O.Bind.Mode == "Hold", tostring(O.Bind.Mode))
+check("share import left the progress bar alone", O.Farm.Value == 0, O.Farm.Value)
+check("share import left the image alone", O.Banner.Value == "rbxassetid://111", O.Banner.Value)
+check("share import honoured the ignore list", T.Bare.Value == false, "an ignored index came back")
+
+-- Nobody pastes a clean string. Chat clients add a trailing newline, and a long
+-- one comes back wrapped.
+step("a pasted string survives whitespace and wrapping", function()
+	local padded = "\n  " .. shared .. "  \n"
+	local wrapped = shared:sub(1, 40) .. "\n" .. shared:sub(41)
+
+	local paddedData = SM:DecodeConfig(padded)
+	local wrappedData = SM:DecodeConfig(wrapped)
+
+	check("leading/trailing whitespace is trimmed", type(paddedData) == "table")
+	check("a wrapped string still decodes", type(wrappedData) == "table")
+	check(
+		"a wrapped string decodes to the same config",
+		type(wrappedData) == "table" and type(paddedData) == "table" and #wrappedData.objects == #paddedData.objects
+	)
+end)
+
+-- Exporting a NAME must read that file, not whatever is on screen. The saved
+-- "smoke" config holds Fov = 321; the live slider is sitting on 287.
+step("ExportConfig of a SAVED config", function()
+	local text, reason = SM:ExportConfig("smoke")
+	check("saved-config export produced a string", type(text) == "string", reason)
+
+	local data = SM:DecodeConfig(type(text) == "string" and text or "")
+	check("saved-config export decodes", type(data) == "table" and type(data.objects) == "table")
+	check("saved-config export is named", type(data) == "table" and data.name == "smoke", type(data) == "table" and tostring(data.name))
+
+	local exported
+	if type(data) == "table" and type(data.objects) == "table" then
+		for _, entry in data.objects do
+			if type(entry) == "table" and entry.idx == "Fov" then
+				exported = entry.value
+			end
+		end
+	end
+	check("saved-config export carries the FILE's values, not the live ones", exported == 321, tostring(exported))
+end)
+
+-- A string that carries nothing is not worth handing to anyone, and saying so is
+-- cheaper than letting the far end report "that decoded, but it is not a config".
+step("a config with no values in it refuses to export", function()
+	local hollow = "SableSmoke/game/settings/hollow.json"
+	Library.Util.FS.WriteJSON(hollow, { name = "hollow", version = 1, objects = {} })
+
+	local text, reason = SM:ExportConfig("hollow")
+	check("an empty config produced no string", text == nil, tostring(text))
+	check("and it said why", type(reason) == "string" and #reason > 0, tostring(reason))
+
+	Library.Util.FS.Delete(hollow)
+end)
+
+-- The LZW stream packs two 12-bit codes into three bytes, so an odd number of
+-- codes leaves a lone code in the last two. Payload size decides that parity,
+-- so only a RANGE of sizes puts both through the encoder. Each probe is padded
+-- with repetition heavy enough that compression must win -- which makes the
+-- length check below a real test of the packing, not just of the decode: a
+-- payload the encoder cannot re-read falls back to plain text and grows.
+step("shared strings survive every payload size", function()
+	local probe = "SableSmoke/game/settings/probe.json"
+
+	for count = 1, 16 do
+		local objects = {}
+		for index = 1, count do
+			table.insert(objects, { type = "Input", idx = "Probe" .. index, value = ("sable"):rep(20 + index) })
+		end
+		Library.Util.FS.WriteJSON(probe, { name = "probe", version = 1, objects = objects })
+
+		local text = SM:ExportConfig("probe")
+		local data = type(text) == "string" and SM:DecodeConfig(text) or nil
+		local last = type(data) == "table" and type(data.objects) == "table" and data.objects[count]
+		local fileSize = #(Library.Util.FS.Read(probe) or "")
+
+		check(
+			("payload of %d entries round-trips"):format(count),
+			type(last) == "table" and #data.objects == count and last.value == ("sable"):rep(20 + count),
+			type(data) == "table" and #data.objects or "did not decode"
+		)
+		-- What the same config would cost with the compressor skipped: the prefix
+		-- plus base64's flat 4 characters per 3 bytes. Eight characters of slack
+		-- absorbs the small difference between the file's JSON and the payload's.
+		local plain = math.ceil((fileSize + 1) / 3) * 4 + 7
+		check(
+			("payload of %d entries stayed compressed"):format(count),
+			type(text) == "string" and #text + 8 < plain,
+			("%d chars, plain would be %d"):format(type(text) == "string" and #text or -1, plain)
+		)
+	end
+
+	Library.Util.FS.Delete(probe)
+end)
+
+-- Every probe above fits comfortably inside the 12-bit code space. A hub with a
+-- few hundred controls does not: past 3840 dictionary entries the encoder stops
+-- adding, and the decoder must stop at exactly the same code or the two walk
+-- apart. Nothing else in this file reaches that far, so nothing else can tell
+-- whether the freeze is honoured at both ends.
+step("a config large enough to freeze the LZW dictionary still round-trips", function()
+	local probe = "SableSmoke/game/settings/big.json"
+
+	local objects = {}
+	for index = 1, 900 do
+		-- Varied on purpose: a config that replayed the same handful of strings
+		-- would never mint enough dictionary entries to reach the ceiling.
+		table.insert(objects, {
+			type = "Input",
+			idx = "Big" .. index,
+			value = ("%d-%s"):format(index * 7919 % 100003, ("qz"):rep(index % 11 + 1)),
+		})
+	end
+	Library.Util.FS.WriteJSON(probe, { name = "big", version = 1, objects = objects })
+
+	local fileSize = #(Library.Util.FS.Read(probe) or "")
+	local text = SM:ExportConfig("big")
+	check("the big config exported", type(text) == "string", tostring(text))
+
+	local data = type(text) == "string" and SM:DecodeConfig(text) or nil
+	local last = type(data) == "table" and type(data.objects) == "table" and data.objects[900]
+	check(
+		"all 900 entries survived a frozen dictionary",
+		type(last) == "table" and #data.objects == 900 and last.value == objects[900].value,
+		type(data) == "table" and type(data.objects) == "table" and #data.objects or "did not decode"
+	)
+
+	-- packPayload re-reads its own output before shipping it, so a decoder frozen
+	-- at a different code than the encoder cannot corrupt anything -- it falls
+	-- back to plain text instead, and the string balloons. Size is the only
+	-- visible symptom of that, so size is what is asserted.
+	local plain = math.ceil((fileSize + 1) / 3) * 4 + 7
+	check(
+		"and it is still compressed, not silently fallen back to raw",
+		type(text) == "string" and #text * 2 < plain,
+		("%d chars, plain would be %d"):format(type(text) == "string" and #text or -1, plain)
+	)
+
+	Library.Util.FS.Delete(probe)
+end)
+
+--- Every failure mode has to come back as a distinct, human-readable reason --
+--- and never as an error, because this is the one input a user pastes into.
+local reasons = {}
+local reasonCount = 0
+local function rejects(label, text)
+	-- pcall passes every return through, so this proves "no error" and reads
+	-- the reason in one call.
+	local ok, value, why = pcall(SM.DecodeConfig, SM, text)
+
+	check(label .. ": did not error", ok, value)
+	if not ok then
+		return
+	end
+
+	check(label .. ": rejected", value == nil, "decoded anyway")
+	check(label .. ": gave a reason", type(why) == "string" and #why > 0, tostring(why))
+
+	if type(why) == "string" then
+		reasons[label] = why
+		reasonCount += 1
+	end
+end
+
+rejects("nil input", nil)
+rejects("empty input", "   \n  ")
+rejects("plain text", "hey look at my config")
+rejects("prefix only", "SABLE1:")
+rejects("unknown version", "SABLE7:UnsiYSI6MX0=")
+rejects("invalid base64", "SABLE1:not base64!!")
+-- Hand-built payloads, base64 of: "R{not json", 'R"just text"', 'R{"a":1}',
+-- 'Q{"objects":[]}' (unknown mode byte) and "Z\0\0\0\9" (a compressed body
+-- whose header promises nine codes and then stops).
+rejects("malformed json", "SABLE1:Untub3QganNvbg==")
+rejects("json that is not a table", "SABLE1:UiJqdXN0IHRleHQi")
+rejects("table that is not a config", "SABLE1:UnsiYSI6MX0=")
+rejects("unknown payload mode", "SABLE1:UXsib2JqZWN0cyI6W119")
+rejects("truncated compressed payload", "SABLE1:WgAAAAk=")
+
+local seenReasons = {}
+for label, reason in reasons do
+	-- "nil input" and "empty input" are the same fault reached two ways, so they
+	-- deliberately share wording. Everything else must stand alone, or a user
+	-- cannot tell a mistyped prefix from a truncated paste.
+	if label ~= "empty input" then
+		check(
+			("reason for %q is its own"):format(label),
+			seenReasons[reason] == nil,
+			("shares wording with %s: %s"):format(tostring(seenReasons[reason]), reason)
+		)
+		seenReasons[reason] = label
+	end
+end
+check("every rejection produced a reason", reasonCount == 11, reasonCount)
+
+-- Two deliberate asymmetries in the base64 reader that no assertion above can
+-- see: it is lenient where leniency costs nothing, strict where strictness is
+-- information.
+step("base64 is lenient about spelling and strict about length", function()
+	-- Chat clients and forums rewrite "+/" into the url-safe "-_". Sable never
+	-- emits those spellings; it does have to read them back. The live config's
+	-- own string is short enough that it need not contain either symbol, and an
+	-- assertion that might exercise nothing is not an assertion -- so grow a
+	-- config until its shared string does.
+	local alphabet = "SableSmoke/game/settings/alphabet.json"
+	local subject, swaps = nil, 0
+	for size = 40, 400, 40 do
+		local objects = {}
+		for index = 1, size do
+			table.insert(objects, { type = "Input", idx = "Sym" .. index, value = ("%d"):format(index * 6151 % 65521) })
+		end
+		Library.Util.FS.WriteJSON(alphabet, { name = "alphabet", version = 1, objects = objects })
+
+		local text = SM:ExportConfig("alphabet")
+		if type(text) == "string" then
+			local _, plus = text:gsub("%+", "")
+			local _, slash = text:gsub("/", "")
+			if plus + slash > 0 then
+				subject, swaps = text, plus + slash
+				break
+			end
+		end
+	end
+	Library.Util.FS.Delete(alphabet)
+
+	check("found a shared string that uses the url-unsafe symbols", swaps > 0, swaps)
+	local urlSafe = subject and (subject:gsub("%+", "-"):gsub("/", "_")) or ""
+	check("a url-safe respelling still decodes", type(SM:DecodeConfig(urlSafe)) == "table")
+	check("and the original spelling decodes too", type(SM:DecodeConfig(subject or "")) == "table")
+
+	-- Four base64 digits carry three bytes, so a lone leftover digit carries
+	-- none. Accepting it would decode to zero bytes and report the WRONG fault --
+	-- "nothing after the prefix", when what actually happened is a truncated
+	-- paste.
+	local decoded, whyLone = SM:DecodeConfig("SABLE1:U")
+	check("a lone base64 digit is rejected", decoded == nil)
+	check("and it is reported as damage, not as an empty body", whyLone == reasons["invalid base64"], tostring(whyLone))
+end)
+
+-- A refused import must be inert, not half-applied.
+step("a rejected import changes nothing", function()
+	local before = O.Fov.Value
+	local ok, reason = SM:ImportConfig("SABLE1:not base64!!")
+	drain()
+	check("import returned false", ok == false)
+	check("import handed back the reason", type(reason) == "string", tostring(reason))
+	check("import touched no values", O.Fov.Value == before, O.Fov.Value)
+end)
+
+step("ImportConfig of junk never errors", function()
+	SM:ImportConfig(nil)
+	SM:ImportConfig("")
+	SM:ImportConfig(42)
+	SM:ImportConfig("SABLE1:")
+end)
+
+--==============================================================
+-- clipboard + named import
+--==============================================================
+
+step("CopyConfig writes the clipboard", function()
+	__clipboard = nil
+	local ok, text = SM:CopyConfig()
+	check("copy reported success", ok == true)
+	check("copy returned the string", type(text) == "string" and text:sub(1, 7) == "SABLE1:", tostring(text):sub(1, 16))
+	check("clipboard holds exactly that string", __clipboard == text, tostring(__clipboard):sub(1, 24))
+end)
+
+step("CopyConfig reports a dead clipboard instead of claiming success", function()
+	__clipboard = nil
+	__clipboardFails = true
+	local ok, text = SM:CopyConfig()
+	__clipboardFails = false
+
+	check("copy reported failure", ok == false)
+	check("copy STILL handed back the string", type(text) == "string" and text:sub(1, 7) == "SABLE1:", tostring(text):sub(1, 16))
+	check("nothing reached the clipboard", __clipboard == nil, tostring(__clipboard))
+end)
+
+step("CopyConfig of a config that does not exist", function()
+	__clipboard = nil
+	local ok, text, reason = SM:CopyConfig("no-such-config")
+	check("copy of a missing config failed", ok == false)
+	check("no string was produced", text == nil, tostring(text))
+	check("a reason was produced", type(reason) == "string", tostring(reason))
+	check("clipboard untouched", __clipboard == nil)
+end)
+
+step("import under a name persists it", function()
+	local ok = SM:ImportConfig(shared, "from friend")
+	check("named import succeeded", ok == true)
+end)
+drain()
+
+check("named import wrote a file", (Library.Util.FS.Read("SableSmoke/game/settings/from friend.json") or "") ~= "")
+check("named import shows up in the list", table.find(SM:ConfigList(), "from friend") ~= nil)
+
+step("the file a named import wrote is loadable", function()
+	O.Fov:SetValue(11)
+	O.Name:SetValue("wiped")
+	SM:Load("from friend")
+end)
+drain()
+check("imported file restored the slider", O.Fov.Value == 287, O.Fov.Value)
+check("imported file restored the input", O.Name.Value == "shared \u{00e9}\u{4e2d}\u{6587}", O.Name.Value)
+
+-- A pasted name is as untrusted as a pasted config: it is sanitised, not
+-- rejected, exactly as :Save does.
+step("a named import cannot escape the settings folder", function()
+	SM:ImportConfig(shared, "../../evil")
+end)
+drain()
+check("traversal collapsed to a plain name", Library.Util.FS.IsFile("SableSmoke/game/settings/evil.json"))
+for path in __files do
+	check("nothing was written outside the folder", path:find("%.%.") == nil, path)
+end
+
+-- The file a named import writes is the decoded payload VERBATIM, not a
+-- re-collect of what landed. For a config this hub can apply in full the two are
+-- indistinguishable -- which is exactly why this probe carries indexes the hub
+-- does NOT have. A re-collect would quietly strip them and hand the next person
+-- a lesser config than the one that was shared.
+step("a named import saves the payload verbatim, foreign entries included", function()
+	local foreign = "SableSmoke/game/settings/foreign.json"
+	Library.Util.FS.WriteJSON(foreign, {
+		name = "foreign",
+		version = 1,
+		objects = {
+			{ type = "Toggle", idx = "NotInThisHub", value = true },
+			{ type = "Slider", idx = "AlsoMissingHere", value = 7 },
+			{ type = "Input", idx = "StrangerStill", value = "kept" },
+		},
+	})
+
+	local text = SM:ExportConfig("foreign")
+	check("a config of foreign entries exports", type(text) == "string", tostring(text))
+	check("and imports under a name", SM:ImportConfig(type(text) == "string" and text or "", "relayed") == true)
+
+	local written = Library.Util.FS.ReadJSON("SableSmoke/game/settings/relayed.json")
+	local objects = type(written) == "table" and type(written.objects) == "table" and written.objects or nil
+
+	local kept = {}
+	for _, entry in objects or {} do
+		if type(entry) == "table" then
+			kept[tostring(entry.idx)] = true
+		end
+	end
+
+	check("the saved file is the payload, not a re-collect", objects ~= nil and #objects == 3, objects and #objects or "unreadable")
+	check(
+		"indexes this hub does not have survived the save",
+		kept.NotInThisHub == true and kept.AlsoMissingHere == true and kept.StrangerStill == true,
+		table.concat(Library.Util.SortedKeys(kept), ",")
+	)
+
+	Library.Util.FS.Delete(foreign)
+end)
+drain()
+
+--==============================================================
+-- share controls in the config groupbox
+--==============================================================
+
+local shareBox = SM.Objects.Share
+check("config section built a paste field", type(shareBox) == "table" and shareBox.Type == "Input", type(shareBox))
+check(
+	"the paste field does not empty itself when clicked",
+	type(shareBox) == "table" and shareBox.Box.ClearTextOnFocus == false,
+	"a paste field that clears on focus loses the paste"
+)
+check("the paste field is ignored by configs", SM.Ignore.SaveManager_ConfigShare == true)
+check("the paste field is listed in Indexes", table.find(SM.Indexes, "SaveManager_ConfigShare") ~= nil)
+
+local copyButton, importButton
+step("find the share buttons", function()
+	for _, box in Tabs.Settings.Boxes do
+		if type(box.Elements) == "table" then
+			for _, element in box.Elements do
+				if element.Type == "Button" and element.Text == "Copy config" then
+					copyButton = element
+				elseif element.Type == "Button" and element.Text == "Import" then
+					importButton = element
+				end
+			end
+		end
+	end
+	check("config section offers COPY CONFIG", copyButton ~= nil)
+	check("config section offers IMPORT", importButton ~= nil)
+end)
+
+step("the COPY button copies", function()
+	if not copyButton then
+		return
+	end
+	__clipboard = nil
+	copyButton.Hit.MouseButton1Click:Fire()
+	drain()
+	check("copy button reached the clipboard", type(__clipboard) == "string" and __clipboard:sub(1, 7) == "SABLE1:", tostring(__clipboard):sub(1, 16))
+end)
+
+step("the IMPORT button reads the paste field and the name field", function()
+	if not importButton or not shareBox then
+		return
+	end
+
+	O.Fov:SetValue(5)
+	shareBox:SetValue(shared)
+	SM.Objects.Name:SetValue("via button")
+
+	importButton.Hit.MouseButton1Click:Fire()
+	drain()
+
+	check("import button applied the pasted string", O.Fov.Value == 287, O.Fov.Value)
+	check("import button saved under the typed name", Library.Util.FS.IsFile("SableSmoke/game/settings/via button.json"))
+end)
+
+step("the IMPORT button reports a bad paste", function()
+	if not importButton or not shareBox then
+		return
+	end
+	shareBox:SetValue("garbage")
+	SM.Objects.Name:SetValue("")
+	importButton.Hit.MouseButton1Click:Fire()
+	drain()
+	check("a rejected paste left the values alone", O.Fov.Value == 287, O.Fov.Value)
 end)
 
 --==============================================================

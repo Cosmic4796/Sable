@@ -22,8 +22,10 @@ src/
   elements/
     Base.lua            element base          [SPINE - do not edit]
     init.lua            installer             [SPINE - do not edit]
+    Track.lua           shared segmented bar (helper, not an element)
     Label.lua  Button.lua  Divider.lua
-    Toggle.lua Slider.lua  Input.lua
+    Section.lua Paragraph.lua Image.lua
+    Toggle.lua Slider.lua ProgressBar.lua Input.lua
     Dropdown.lua ColorPicker.lua KeyPicker.lua
   addons/
     ThemeManager.lua  SaveManager.lua
@@ -139,7 +141,9 @@ inner insets, cell gutters and marker overhangs are all counted in hairlines.
 - **Segmented slider bar** — the track is `Library.Sizes.Segments` (16) equal
   frames in a horizontal `UIListLayout`. Value changes **recolour** segments
   (`Accent` filled / `PanelSunken` empty); they are never resized. The numeric
-  readout carries the exact value.
+  readout carries the exact value. There is exactly **one** implementation of it,
+  `elements/Track`, shared by Slider and ProgressBar — a second segmented bar
+  would drift out of step with the first.
 
 ---
 
@@ -292,8 +296,16 @@ the **left** of the primary control.
 
 ### Store placement
 
-`Library.Toggles` — Toggle only. `Library.Options` — Slider, Input, Dropdown,
-ColorPicker, KeyPicker. Label / Button / Divider are unregistered (pass `nil`).
+`Library.Toggles` — Toggle only. `Library.Options` — Slider, ProgressBar, Input,
+Dropdown, ColorPicker, KeyPicker, Image. Label / Button / Divider / Section /
+Paragraph are unregistered (pass `nil`).
+
+Being in `Library.Options` is **not** the same as being saved. `SaveManager`'s
+`serialize` dispatches on `element.Type` and ends in a bare `return nil`, which
+drops every type it has no case for; `Collect` then skips it (`if ok and entry
+then`), and `Apply` cannot match it either, because it requires
+`element.Type == entry.type`. ProgressBar and Image are runtime state and depend
+on exactly that — **do not add a case for either**.
 
 ---
 
@@ -305,6 +317,19 @@ Groupbox:AddButton(textOrTable)   -> Button         -- {Text, Func, DoubleClick,
                                                     -- Button:AddButton(...) splits the row
 Groupbox:AddDivider()
 
+Groupbox:AddSection(text) -> Section
+  -- A named break: chrome caption on the left, then a hairline out to the right
+  -- edge on the caption's centre line. Taller than a control row, holds no
+  -- value, not stored. :SetText(text) RE-MEASURES, so the rule still starts
+  -- after the caption.
+
+Groupbox:AddParagraph(title, body) -> Paragraph
+  -- Explanatory copy: instructions, a changelog, a warning. Title in the label
+  -- voice, body wrapped underneath in FontDim, ROW auto-sizing to the text. The
+  -- body keeps the caller's own casing -- it is a sentence, not a label.
+  -- .Body string · .Value == .Body · :SetText(title, body?) · :SetBody(body)
+  -- Not stored. Reflows on :SetText/:SetBody and when the column changes width.
+
 Groupbox:AddToggle(idx, { Text, Default=false, Tooltip, DisabledTooltip,
                           Risky=false, Disabled=false, Visible=true, Callback })
   -> .Value boolean · :SetValue(v, silent) · :AddColorPicker(idx, o) · :AddKeyPicker(idx, o)
@@ -312,6 +337,14 @@ Groupbox:AddToggle(idx, { Text, Default=false, Tooltip, DisabledTooltip,
 Groupbox:AddSlider(idx, { Text, Default, Min, Max, Rounding=0, Suffix="",
                           Compact=false, Segments=16, Tooltip, Callback })
   -> .Value number · :SetValue(v, silent) · :SetMin(n) · :SetMax(n)
+
+Groupbox:AddProgressBar(idx, { Text, Default=0, Min=0, Max=100, Rounding=0,
+                               Suffix="%", Segments=16, Tooltip, Callback })
+  -> .Value number · :SetValue(v, silent) · :SetMin(n) · :SetMax(n)
+     The slider's segmented track and right-aligned readout, read ONLY: no hit
+     button, no drag, and the readout stays FontDim because nothing the user
+     does can move it. Registered in Library.Options so a script can drive it;
+     never written to a config, because progress is runtime state.
 
 Groupbox:AddInput(idx, { Text, Default="", Placeholder="", Numeric=false,
                          Finished=false, ClearTextOnFocus=true, MaxLength,
@@ -340,6 +373,14 @@ Groupbox:AddKeyPicker(idx, { Default="None", Text, Mode="Toggle"|"Hold"|"Always"
      Toggle: flips state on press. Hold: true while held. Always: always true.
      NoUI=false registers it in the keybind list overlay.
      SyncToggleState=true mirrors the parent Toggle's value.
+
+Groupbox:AddImage(idx, { Image="rbxassetid://...", Height=RowHeight*4,
+                         ScaleType=Enum.ScaleType.Fit, Transparency=0, Tooltip })
+  -> .Value string (the asset id) · :SetImage(id, silent) · :SetValue(id, silent)
+     :SetTransparency(n) · .ImageLabel
+     A hairline-outlined sunken panel, full row width, holding one ImageLabel.
+     Registered in Library.Options so a hub can swap the asset live; never
+     written to a config.
 ```
 
 ---
@@ -408,6 +449,10 @@ Library.ThemeManager:SetLibrary(L) :SetFolder(path) :ApplyToTab(tab)
 Library.SaveManager:SetLibrary(L) :SetFolder(path) :IgnoreThemeSettings()
   :SetIgnoreIndexes({...}) :BuildConfigSection(tab) :LoadAutoloadConfig()
   :Save(name) :Load(name) :Delete(name) :RefreshConfigList()
+  :ExportConfig(name?) -> string?, err?    -- name: that file. no name: live state
+  :CopyConfig(name?)   -> ok, text?, err?  -- export + clipboard + notify
+  :ImportConfig(text, name?) -> ok, err?   -- decode + :Apply, and save when named
+  :DecodeConfig(text)  -> table?, err?     -- pure; no elements, no files, no notify
 ```
 
 Both are reached off `Library` (already `SetLibrary`'d by the spine); the
@@ -419,8 +464,48 @@ under `<folder>/settings/<name>.json` using `Util.FS`. Serialise per type:
 Toggle→bool, Slider→number, Input→string, Dropdown→string or set,
 ColorPicker→`{hex, transparency}`, KeyPicker→`{key, mode}`. Loading calls
 `:SetValue(value)` (not silent) so callbacks run. Unknown indexes are skipped,
-never errored on. All filesystem access goes through `Util.FS`, which degrades
-to no-ops outside an executor.
+never errored on — and so are element **types** with no case in `serialize`
+(ProgressBar, Image), which is how runtime-only readouts stay out of configs.
+All filesystem access goes through `Util.FS`, which degrades to no-ops outside
+an executor.
+
+### Shareable configs
+
+A config also travels as **one line of paste-safe text** so it can be handed to
+someone else: `SABLE1:` followed by base64 of a payload. The version sits in the
+**prefix**, so a build that cannot read a string says *why* instead of guessing;
+the payload's **first byte** is the packing mode — `R` plain JSON, `Z` the
+in-house LZW (12-bit codes, two to every three bytes, dictionary frozen at
+4096 — a reset would have to be synchronised with a decoder that is always one
+entry behind). The compressed form is **decoded and compared before it ships**;
+if it does not round-trip, or did not shrink, the plain payload goes instead and
+the mode byte says so. Compression is an optimisation, correctness is not.
+
+`ExportConfig(name)` encodes that saved file; with no name it encodes
+`:Collect()`, so a config can be shared without being saved first. `CopyConfig`
+is export + `Util.SetClipboard` + `Notify`, and when the clipboard is
+unavailable it **still returns the string** and reports that as the failure
+rather than claiming a copy. `ImportConfig` applies through the same `:Apply`
+path as a load, and with a name also writes the payload **verbatim** under the
+sanitised name — the saved file is then byte-for-byte the config that was
+shared, entries for elements this hub lacks included.
+
+Import is the one place a user pastes arbitrary text, so **`DecodeConfig` never
+errors — it returns `nil, reason`**, and every failure has its own wording:
+missing prefix, unknown version, nothing after the prefix, unreadable base64,
+unknown payload mode, a compressed body cut short, unreadable JSON, JSON that is
+not a table, and a table that is not a config. Surrounding whitespace and
+newlines a chat client wrapped in are stripped first. Unknown indexes are skipped
+by `:Apply` as always.
+
+The UI is in `:BuildConfigSection`, after the autoload row: a **Share** section,
+a **COPY CONFIG** button (the selected config, or the live state when none is
+selected), a paste **Input** (`SaveManager_ConfigShare`, `ClearTextOnFocus` off —
+a field that empties on click loses the paste), and an **IMPORT** button that
+applies it and saves it under whatever is in the config-name field. Reading the
+clipboard is deliberately not attempted: `setclipboard` is near-universal among
+executors, a working `getclipboard` is not. All three of SaveManager's own
+indexes are in `SaveManager.Ignore`, so none of them can ride inside a config.
 
 `ThemeManager.BuiltInThemes` must include the default (`"Sable"`) plus at
 least: `Ember` (red), `Signal` (green), `Ice` (cyan), `Void` (violet, low

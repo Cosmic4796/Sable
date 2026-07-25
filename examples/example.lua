@@ -48,6 +48,10 @@ Aimbot:AddToggle("AimbotEnabled", {
 Aimbot:AddToggle("AimbotTeamCheck", { Text = "Team check", Default = true })
 Aimbot:AddToggle("AimbotWallCheck", { Text = "Wall check", Default = true })
 
+-- A section breaks a long groupbox into named parts. It holds no value and is
+-- never saved: it is a divider with a name on it.
+Aimbot:AddSection("Tuning")
+
 Aimbot:AddSlider("AimbotFOV", {
 	Text = "FOV",
 	Default = 120,
@@ -125,6 +129,8 @@ Risky:AddToggle("AutoShoot", {
 
 local ESP = Tabs.Visuals:AddLeftGroupbox("ESP")
 
+ESP:AddSection("Overlays")
+
 ESP:AddToggle("EspEnabled", { Text = "Enabled", Default = true })
 ESP:AddToggle("EspBoxes", { Text = "Boxes", Default = true })
 	:AddColorPicker("EspBoxColor", { Default = Color3.fromRGB(218, 213, 204) })
@@ -132,6 +138,8 @@ ESP:AddToggle("EspNames", { Text = "Names", Default = false })
 	:AddColorPicker("EspNameColor", { Default = Color3.fromRGB(233, 161, 59) })
 ESP:AddToggle("EspTracers", { Text = "Tracers", Default = false })
 	:AddColorPicker("EspTracerColor", { Default = Color3.fromRGB(226, 78, 63), Transparency = 0 })
+
+ESP:AddSection("Limits")
 
 ESP:AddSlider("EspFill", { Text = "Box fill", Default = 40, Min = 0, Max = 100, Rounding = 0, Suffix = "%" })
 ESP:AddSlider("EspMaxDistance", { Text = "Max distance", Default = 500, Min = 50, Max = 2000, Rounding = 0 })
@@ -194,6 +202,45 @@ Danger:AddButton({
 local Info = Tabs.Player:AddRightGroupbox("Info")
 Info:AddLabel("Executor: " .. Library.Util.ExecutorName())
 Info:AddLabel("A wrapping label, used for longer explanatory copy that needs more than one line to say what it means.", true)
+
+-- A paragraph is the wrapping label with a heading on it: instructions, a
+-- changelog, a warning. Title cased like a label, body left as written.
+Info:AddParagraph(
+	"How this works",
+	"Everything on this tab is a demonstration. Values are stored in Options and "
+		.. "Toggles by index, and configs restore them by calling :SetValue, so your "
+		.. "callbacks run exactly as if the control had been clicked."
+)
+
+Info:AddSection("Session")
+
+-- Read only: the script drives it, the user watches it. It lives in Options so
+-- it can be driven by index, but progress is runtime state and is never saved.
+Info:AddProgressBar("SessionProgress", {
+	Text = "Farm progress",
+	Default = 0,
+	Min = 0,
+	Max = 100,
+	Rounding = 0,
+	Suffix = "%",
+	Tooltip = "Driven by the script, not by the user",
+})
+
+Info:AddButton({
+	Text = "Advance progress",
+	Func = function()
+		local bar = Library.Options.SessionProgress
+		bar:SetValue(bar.Value >= bar.Max and 0 or bar.Value + 10)
+	end,
+})
+
+-- rbxasset:// paths are shipped with the client, so this one resolves without
+-- an upload. A hub would use rbxassetid://<id> for its own art.
+Info:AddImage("InfoBanner", {
+	Image = "rbxasset://textures/ui/GuiImagePlaceholder.png",
+	Height = 96,
+	Tooltip = "Swap it live with :SetImage",
+})
 
 --==============================================================
 -- Settings

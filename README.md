@@ -10,7 +10,7 @@ dashboard.
 
 ```
 ┌╴                                            ╶┐
-   S A B L E                            SYS 1.1
+   S A B L E                            SYS 1.2
 └╴                                            ╶┘
 
     M A I N      V I S U A L S      P L A Y E R
@@ -66,11 +66,15 @@ A full hub exercising every element is in [`examples/example.lua`](examples/exam
 Groupbox:AddLabel(text, doesWrap)
 Groupbox:AddButton({ Text, Func, DoubleClick, Tooltip, Disabled })
 Groupbox:AddDivider()
+Groupbox:AddSection(text)                 -- named rule; breaks up a long groupbox
+Groupbox:AddParagraph(title, body)        -- heading + wrapped copy, row grows to fit
 
 Groupbox:AddToggle(idx, { Text, Default, Tooltip, DisabledTooltip,
                           Risky, Disabled, Visible, Callback })
 Groupbox:AddSlider(idx, { Text, Default, Min, Max, Rounding, Suffix,
                           Compact, Segments, Callback })
+Groupbox:AddProgressBar(idx, { Text, Default, Min, Max, Rounding, Suffix,
+                               Segments, Tooltip })      -- read-only
 Groupbox:AddInput(idx,  { Text, Default, Placeholder, Numeric, Finished,
                           ClearTextOnFocus, MaxLength, Callback })
 Groupbox:AddDropdown(idx, { Text, Values, Default, Multi, AllowNull,
@@ -78,7 +82,16 @@ Groupbox:AddDropdown(idx, { Text, Values, Default, Multi, AllowNull,
 Groupbox:AddColorPicker(idx, { Default, Title, Transparency, Callback })
 Groupbox:AddKeyPicker(idx, { Default, Text, Mode, SyncToggleState, NoUI,
                              Callback, ChangedCallback })
+Groupbox:AddImage(idx, { Image, Height, ScaleType, Transparency, Tooltip })
 ```
+
+**Read-only elements.** `AddProgressBar` wears the slider's segmented track and
+readout with the interaction taken out — no drag, no hit target, a readout that
+never brightens. `AddImage` frames one `ImageLabel` in a hairline panel. Both are
+registered in `Options` so a script can drive them by index
+(`Options.Farm:SetValue(72)`, `Options.Banner:SetImage(id)`), and **neither is
+ever written to a config** — progress and artwork are runtime state, not
+settings. `AddSection` and `AddParagraph` hold no value at all.
 
 Toggles and Labels accept inline pickers, which render to the left of the
 control on the same row:
@@ -106,9 +119,11 @@ element:SetTooltip(text, disabledText)
 element:Destroy()
 ```
 
-Type-specific extras: `Slider:SetMin/SetMax`, `Dropdown:SetValues`,
-`ColorPicker.Transparency` / `:SetValueRGB`, `KeyPicker:GetState()` /
-`:OnClick(fn)` / `.Mode`, `Button:AddButton(...)` (splits the row).
+Type-specific extras: `Slider:SetMin/SetMax`, `ProgressBar:SetMin/SetMax`,
+`Dropdown:SetValues`, `ColorPicker.Transparency` / `:SetValueRGB`,
+`KeyPicker:GetState()` / `:OnClick(fn)` / `.Mode`, `Paragraph:SetText(title,
+body)` / `:SetBody(body)`, `Image:SetImage(id)` / `:SetTransparency(n)`,
+`Button:AddButton(...)` (splits the row).
 
 ### Containers
 
@@ -188,6 +203,47 @@ One JSON per theme, every colour a hex string. Picking a name from the dropdown
 loads it, and `:SetDefault()` accepts a saved theme as well as a preset, so your
 own theme can be the one that comes up on load. `default` is reserved — that is
 the pointer file `:SetDefault` writes.
+
+### Sharing a config
+
+Configs travel as one line of text, so a setup can be handed to someone else
+instead of read out slider by slider. The **Share** block at the bottom of the
+Configuration groupbox has a **COPY CONFIG** button, a field to paste into, and
+**IMPORT**:
+
+- **COPY CONFIG** copies the selected config — or, with nothing selected, the
+  values currently on screen — to the clipboard.
+- **IMPORT** applies whatever is in the paste field, and if the *config name*
+  field above is filled in, saves it under that name as well.
+
+Export copies; import reads a box. Reading the clipboard is not portable —
+`setclipboard` is near-universal among executors and a working `getclipboard` is
+not — so the paste is left to the user.
+
+```lua
+local text = SaveManager:ExportConfig()          -- live values -> "SABLE1:..."
+local text = SaveManager:ExportConfig("legit")   -- a saved config instead
+SaveManager:CopyConfig()                         -- export + clipboard + notify
+SaveManager:ImportConfig(text)                   -- apply it
+SaveManager:ImportConfig(text, "from friend")    -- apply it and save it
+SaveManager:DecodeConfig(text)                   -- -> table?, reason?  (pure)
+```
+
+The string is `SABLE1:` plus base64 of the JSON, compressed with a small LZW
+first — around **half** the length of the raw base64 for a real hub (a
+41-element config: 2411 characters of JSON, 3223 as plain base64, **1671** as a
+shared string). The compressed form is decoded and compared before it is handed
+out, so a string that cannot be read back is never produced; it falls back to
+the uncompressed form instead.
+
+Import never errors on a bad paste, it explains: a missing `SABLE1:` prefix, a
+version this build does not read, damaged base64, a body cut short, unreadable
+JSON, and a string that decoded into something that is not a config all report
+their own reason through `Library:Notify`. Whitespace and line wrapping picked up
+in transit are ignored, and indexes this hub does not have are skipped.
+
+Both ends must be the same hub — a config is a list of element indexes, so a
+string from another script simply finds nothing to apply.
 
 ### Moving the HUD
 
@@ -290,7 +346,7 @@ src/Signal.lua            pcall-isolated signals
 src/Theme.lua             palette, metrics, fonts, colour registry
 src/Window.lua            window / tab / groupbox / tabbox / dependency box
 src/Overlays.lua          watermark, notifications, keybind list
-src/elements/             Base + the nine controls (see src/elements/README.md)
+src/elements/             Base + the thirteen controls (see src/elements/README.md)
 src/addons/               ThemeManager, SaveManager
 tools/                    build, verification, headless mock (see tools/README.md)
 examples/example.lua      full hub exercising every element

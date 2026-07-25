@@ -57,6 +57,25 @@ check("watermark toggle registered", Library.Toggles.SableWatermark ~= nil)
 check("keybind list toggle registered", Library.Toggles.SableKeybindList ~= nil)
 check("theme list registered", Library.Options[Library.ThemeManager.ListIndex] ~= nil)
 
+-- Read-only elements: registered so a script can drive them, but never saved.
+check("progress bar registered", Library.Options.SessionProgress ~= nil)
+check("image registered", Library.Options.InfoBanner ~= nil)
+check("share field registered", Library.Options.SaveManager_ConfigShare ~= nil)
+for _, entry in Library.SaveManager:Collect() do
+\tcheck(
+\t\t"runtime element kept out of configs",
+\t\tentry.idx ~= "SessionProgress" and entry.idx ~= "InfoBanner" and entry.idx ~= "SaveManager_ConfigShare",
+\t\ttostring(entry.idx)
+\t)
+end
+
+-- The example's own config has to survive a trip through a shared string.
+local shared = Library.SaveManager:ExportConfig()
+check("config exports as one paste-safe line", type(shared) == "string" and shared:match("^SABLE1:[A-Za-z0-9%+/=]+$") ~= nil, tostring(shared):sub(1, 24))
+local decoded = Library.SaveManager:DecodeConfig(type(shared) == "string" and shared or "")
+check("shared string decodes back", type(decoded) == "table" and #decoded.objects == #Library.SaveManager:Collect())
+print("shared config: " .. #Library.SaveManager:Collect() .. " values, " .. #tostring(shared) .. " chars")
+
 if failed == 0 then
 \tprint("EXAMPLE OK")
 else

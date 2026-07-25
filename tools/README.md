@@ -49,11 +49,16 @@ prints where the mock ends on every run.
 `mock_roblox.luau` implements enough of the Roblox surface to *execute* the
 library outside Roblox: `Instance` with a property bag, children, attributes and
 `GetPropertyChangedSignal`; `Color3` / `UDim2` / `UDim` / `Vector2` / `TweenInfo` /
-`ColorSequence`; an identity-stable `Enum` (so enum items work as table keys);
+`ColorSequence` (`Vector2`, `Color3`, `UDim` and `UDim2` compare by VALUE, as
+they do in Roblox — identity comparison would make `a.Size ~= b.Size` a false
+pass); an identity-stable `Enum` (so enum items work as table keys);
 `TweenService` (applies props instantly so final state is observable);
 `UserInputService` and `RunService` signals you can `:Fire()` by hand; a real JSON
-encoder/decoder; `task`; and an in-memory filesystem behind `writefile`/`readfile`/
-`listfiles`/`getgenv`.
+encoder/decoder; `task`; an in-memory filesystem behind `writefile`/`readfile`/
+`listfiles`/`getgenv`; and a `setclipboard` that **remembers** what it was given
+(`__clipboard`) and can be made to throw (`__clipboardFails = true`), so "we
+copied it" is asserted rather than assumed and the dead-clipboard branch is
+reachable.
 
 It is not pixel-accurate and is not meant to be. It catches nil indexes, load-order
 faults, re-entrancy, broken value round-trips and unclean teardown — the failures
