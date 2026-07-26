@@ -129,9 +129,69 @@ Theme.Motion = {
 -- install
 --==============================================================
 
+--==============================================================
+-- touch metrics
+--==============================================================
+
+-- Overrides applied when the UI is driven by a thumb instead of a cursor.
+--
+-- Deliberately NOT a blanket scale factor. A finger needs a bigger TARGET, but
+-- text does not need to be much bigger to stay legible, and padding blown up by
+-- the same factor wastes the little screen a phone has. So only the things you
+-- actually hit grow, plus one step on the type so it survives a smaller
+-- viewport.
+--
+-- 44 for RowHeight is the number both Apple and Google land on for a minimum
+-- touch target, and a row is the primary hit surface here: a toggle's whole row
+-- is clickable, not just its 15px box.
+Theme.TouchSizes = {
+	RowHeight = 44,
+	RowGap = 6,
+
+	TitleBar = 44, -- also the drag handle, so it must be grabbable
+	TabStrip = 40,
+
+	Control = 24, -- checkbox / swatch square
+	Track = 14, -- slider bar; the hit area grows with RowHeight on top
+
+	Text = 14,
+	TextSmall = 13,
+	TextTitle = 15,
+
+	-- A phone in landscape is not much taller than the desktop minimum, so the
+	-- floor has to come down or the window cannot fit at all.
+	WindowMinWidth = 300,
+	WindowMinHeight = 260,
+
+	PickerSquare = 160,
+}
+
+--- Pure: base metrics -> touch metrics. Separate from Install so it can be
+--- tested without standing up a whole library on a device that does not exist.
+function Theme.TouchMetrics(base)
+	local out = table.clone(base)
+	for key, value in Theme.TouchSizes do
+		out[key] = value
+	end
+	return out
+end
+
 function Theme.Install(Library)
 	Library.Scheme = table.clone(Theme.Default)
-	Library.Sizes = table.clone(Theme.Sizes)
+
+	-- Chosen ONCE, at install. Every element derives its geometry from this
+	-- table at construction, so flipping it later would leave already-built
+	-- rows at the old size while new ones came out bigger.
+	local touch = type(Library.IsTouchUI) == "function" and Library:IsTouchUI()
+	Library.Sizes = touch and Theme.TouchMetrics(Theme.Sizes) or table.clone(Theme.Sizes)
+	Library.TouchMetricsActive = touch == true
+
+	--- What touch mode WOULD produce from a given base table. Exposed so the
+	--- transform is testable off-device, and so a host can show the user what
+	--- mobile mode changes without having to be on a phone to find out.
+	function Library:TouchMetricsOf(base)
+		return Theme.TouchMetrics(base or Theme.Sizes)
+	end
 	Library.Fonts = table.clone(Theme.Fonts)
 	Library.Motion = table.clone(Theme.Motion)
 	Library.Registry = {}

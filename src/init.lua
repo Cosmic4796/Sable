@@ -874,11 +874,15 @@ function Library:EnsureTouchToggle()
 		return touchToggle
 	end
 
-	local size = 46
+	-- Derived, not hardcoded. Theme.Sizes is the single source of truth for
+	-- geometry, and on touch RowHeight is already the minimum comfortable
+	-- target -- so the button is exactly one row square by construction.
+	local Sizes = self.Sizes
+	local size = Sizes.RowHeight
 	local button, stroke = self:Panel({
 		Name = "TouchToggle",
 		Active = true,
-		Position = UDim2.new(0, 12, 0, 96),
+		Position = UDim2.fromOffset(Sizes.GroupPad, Sizes.TitleBar * 2 + Sizes.GroupPad),
 		Size = UDim2.fromOffset(size, size),
 		ZIndex = 5,
 		Hud = true,
@@ -890,7 +894,7 @@ function Library:EnsureTouchToggle()
 		Font = self.Fonts.Title,
 		Size = UDim2.fromScale(1, 1),
 		Text = "\u{2261}", -- three bars; no image asset, so nothing to load
-		TextSize = 22,
+		TextSize = Sizes.TextTitle + 6,
 		TextXAlignment = Enum.TextXAlignment.Center,
 		Parent = button,
 	}, "Accent")

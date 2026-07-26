@@ -285,6 +285,45 @@ step("touch UI detection and the on-screen toggle", function()
 	Library.ForceTouchUI = nil
 end)
 
+--- Touch metrics are a PURE transform of the base table, so they can be checked
+--- without standing up a library on a device that does not exist.
+step("touch metrics grow targets without blowing up the layout", function()
+	local base = Library.Sizes
+	check("the transform is exposed for testing", type(Library.TouchMetricsOf) == "function")
+	local touch = Library:TouchMetricsOf(base)
+
+	-- The things you HIT must clear the 44px minimum both Apple and Google use.
+	check("row height reaches a real touch target", touch.RowHeight >= 44,
+		tostring(touch.RowHeight))
+	check("the title bar stays grabbable", touch.TitleBar >= 44, tostring(touch.TitleBar))
+	check("the checkbox square grows", touch.Control > base.Control,
+		("%d -> %d"):format(base.Control, touch.Control))
+	check("rows separate more, to resist mis-taps", touch.RowGap > base.RowGap,
+		("%d -> %d"):format(base.RowGap, touch.RowGap))
+
+	-- ...but NOT a blanket scale. A phone has less screen, not more, so padding
+	-- must not grow with the targets or the content area vanishes.
+	check("padding is left alone", touch.GroupPad == base.GroupPad,
+		("%d vs %d"):format(touch.GroupPad, base.GroupPad))
+	check("column gap is left alone", touch.ColumnGap == base.ColumnGap)
+	check("text grows by at most a step", touch.Text - base.Text <= 2,
+		("%d -> %d"):format(base.Text, touch.Text))
+
+	-- The window floor has to come DOWN, or the window cannot fit a phone at all.
+	check("the minimum window shrinks", touch.WindowMinHeight < base.WindowMinHeight,
+		("%d -> %d"):format(base.WindowMinHeight, touch.WindowMinHeight))
+
+	-- Every key in the base table must survive: a missing metric is a nil
+	-- arithmetic error deep inside an element, far from here.
+	local missing = {}
+	for key in base do
+		if touch[key] == nil then
+			missing[#missing + 1] = tostring(key)
+		end
+	end
+	check("no metric is dropped", #missing == 0, table.concat(missing, ", "))
+end)
+
 --- 620x660 is taller than a phone in landscape, and a window cannot be dragged
 --- or resized back inside the viewport once its footer is off-screen.
 step("the default window size is clamped to the viewport", function()
