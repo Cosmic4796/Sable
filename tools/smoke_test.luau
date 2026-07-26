@@ -238,6 +238,49 @@ step("dependency box", function()
 	dep:SetupDependencies({ { Library.Toggles.Esp, true } })
 end)
 
+--- Grouping a hub by "sub-option reveals under its parent" only works if a
+--- dependency box can hold ANOTHER one -- e.g. FOV > Fill > Transparency.
+--- Nothing forbade it, but nothing had ever done it either.
+step("dependency boxes nest", function()
+	local outerToggle = Left:AddToggle("NestOuter", { Text = "Outer", Default = false })
+	local outer = Left:AddDependencyBox()
+	outer:SetupDependencies({ { Library.Toggles.NestOuter, true } })
+
+	local innerToggle = outer:AddToggle("NestInner", { Text = "Inner", Default = false })
+	local inner = outer:AddDependencyBox()
+	inner:SetupDependencies({ { Library.Toggles.NestInner, true } })
+	inner:AddSlider("NestSlider", { Text = "Deep", Default = 1, Min = 0, Max = 10 })
+
+	check("the inner box is parented inside the outer", inner.Container.Parent == outer.Container,
+		tostring(inner.Container.Parent))
+
+	-- Both off: nothing is showing.
+	check("both hidden while the outer is off", outer.Container.Visible == false)
+
+	outerToggle:SetValue(true)
+	drain()
+	check("outer reveals when its dependency is met", outer.Container.Visible == true)
+	check("inner stays hidden on its own dependency", inner.Container.Visible == false)
+
+	innerToggle:SetValue(true)
+	drain()
+	check("inner reveals once its own is met too", inner.Container.Visible == true)
+
+	-- NOT asserted here: that the outer box grows to fit the inner. Height comes
+	-- from UIListLayout.AbsoluteContentSize, and the mock hardcodes that to
+	-- zero, so EVERY dependency box measures 0 in this harness and the check
+	-- would pass or fail for reasons unrelated to nesting. It has to be looked
+	-- at in a real client. What IS pinned here is the part the mock can answer:
+	-- parenting, and that each box tracks its own dependency independently.
+	check("the outer sizes itself from its layout", type(outer.Recompute) == "function")
+	check("and so does the inner", type(inner.Recompute) == "function")
+
+	-- Collapsing the outer must take the inner with it, whatever the inner says.
+	outerToggle:SetValue(false)
+	drain()
+	check("collapsing the outer hides everything", outer.Container.Visible == false)
+end)
+
 drain()
 
 --==============================================================
