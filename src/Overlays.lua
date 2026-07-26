@@ -524,7 +524,29 @@ function Overlays.Install(Library)
 
 	local leadingSegment = Library:FormatLabel(Library.Name)
 	local fps = 0
-	local frameMs = 0
+	local ping = 0
+
+	--- Network ping, in milliseconds.
+	---
+	--- This segment used to show FRAME TIME, which is 1000/FPS -- arithmetically
+	--- redundant with the FPS reading sitting right next to it, and read by
+	--- everyone as ping, because "MS" beside a framerate in a game overlay means
+	--- ping. So show the thing people were already reading it as.
+	---
+	--- Wrapped: Stats is present in a real client but not in the test mock, and
+	--- the item name has changed across engine versions, so a miss falls back to
+	--- the last good number rather than blanking the segment.
+	local function readPing()
+		local ok, value = pcall(function()
+			local stats = game:GetService("Stats")
+			local item = stats.Network.ServerStatsItem["Data Ping"]
+			return item:GetValue()
+		end)
+		if ok and type(value) == "number" and value > 0 then
+			return math.floor(value + 0.5)
+		end
+		return ping
+	end
 
 	local function refreshWatermark()
 		if Library.Unloaded then
@@ -534,7 +556,7 @@ function Overlays.Install(Library)
 		setSegments({
 			leadingSegment,
 			("%d FPS"):format(fps),
-			("%d MS"):format(frameMs),
+			("%d MS"):format(ping),
 			tostring(os.date("%H:%M:%S")),
 		})
 	end
@@ -557,7 +579,7 @@ function Overlays.Install(Library)
 		-- a single hitch does not make the readout jump.
 		local average = frameTime / frameCount
 		fps = average > 0 and math.floor(1 / average + 0.5) or 0
-		frameMs = math.floor(average * 1000 + 0.5)
+		ping = readPing()
 
 		frameCount = 0
 		frameTime = 0

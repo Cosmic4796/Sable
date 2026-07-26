@@ -1,126 +1,126 @@
 {
   "Overlays": {
     "offset": 28,
-    "lines": 971,
+    "lines": 993,
     "path": "src/Overlays.lua"
   },
   "Signal": {
-    "offset": 1002,
+    "offset": 1024,
     "lines": 88,
     "path": "src/Signal.lua"
   },
   "Theme": {
-    "offset": 1093,
+    "offset": 1115,
     "lines": 311,
     "path": "src/Theme.lua"
   },
   "Util": {
-    "offset": 1407,
+    "offset": 1429,
     "lines": 836,
     "path": "src/Util.lua"
   },
   "Window": {
-    "offset": 2246,
-    "lines": 1082,
+    "offset": 2268,
+    "lines": 1125,
     "path": "src/Window.lua"
   },
   "addons/SaveManager": {
-    "offset": 3331,
+    "offset": 3396,
     "lines": 1204,
     "path": "src/addons/SaveManager.lua"
   },
   "addons/ThemeManager": {
-    "offset": 4538,
+    "offset": 4603,
     "lines": 884,
     "path": "src/addons/ThemeManager.lua"
   },
   "elements/Base": {
-    "offset": 5425,
+    "offset": 5490,
     "lines": 240,
     "path": "src/elements/Base.lua"
   },
   "elements/Button": {
-    "offset": 5668,
+    "offset": 5733,
     "lines": 276,
     "path": "src/elements/Button.lua"
   },
   "elements/ColorPicker": {
-    "offset": 5947,
+    "offset": 6012,
     "lines": 737,
     "path": "src/elements/ColorPicker.lua"
   },
   "elements/Divider": {
-    "offset": 6687,
+    "offset": 6752,
     "lines": 45,
     "path": "src/elements/Divider.lua"
   },
   "elements/Dropdown": {
-    "offset": 6735,
+    "offset": 6800,
     "lines": 591,
     "path": "src/elements/Dropdown.lua"
   },
   "elements/Image": {
-    "offset": 7329,
+    "offset": 7394,
     "lines": 130,
     "path": "src/elements/Image.lua"
   },
   "elements/Input": {
-    "offset": 7462,
+    "offset": 7527,
     "lines": 250,
     "path": "src/elements/Input.lua"
   },
   "elements/KeyPicker": {
-    "offset": 7715,
-    "lines": 666,
+    "offset": 7780,
+    "lines": 678,
     "path": "src/elements/KeyPicker.lua"
   },
   "elements/Label": {
-    "offset": 8384,
+    "offset": 8461,
     "lines": 116,
     "path": "src/elements/Label.lua"
   },
   "elements/Numeric": {
-    "offset": 8503,
-    "lines": 321,
+    "offset": 8580,
+    "lines": 351,
     "path": "src/elements/Numeric.lua"
   },
   "elements/Paragraph": {
-    "offset": 8827,
+    "offset": 8934,
     "lines": 159,
     "path": "src/elements/Paragraph.lua"
   },
   "elements/ProgressBar": {
-    "offset": 8989,
+    "offset": 9096,
     "lines": 36,
     "path": "src/elements/ProgressBar.lua"
   },
   "elements/Section": {
-    "offset": 9028,
+    "offset": 9135,
     "lines": 108,
     "path": "src/elements/Section.lua"
   },
   "elements/Slider": {
-    "offset": 9139,
-    "lines": 111,
+    "offset": 9246,
+    "lines": 205,
     "path": "src/elements/Slider.lua"
   },
   "elements/Toggle": {
-    "offset": 9253,
+    "offset": 9454,
     "lines": 222,
     "path": "src/elements/Toggle.lua"
   },
   "elements/Track": {
-    "offset": 9478,
+    "offset": 9679,
     "lines": 129,
     "path": "src/elements/Track.lua"
   },
   "elements/init": {
-    "offset": 9610,
+    "offset": 9811,
     "lines": 109,
     "path": "src/elements/init.lua"
   },
   "init": {
-    "offset": 9722,
+    "offset": 9923,
     "lines": 854,
     "path": "src/init.lua"
   }

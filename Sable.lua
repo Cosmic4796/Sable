@@ -552,7 +552,29 @@ function Overlays.Install(Library)
 
 	local leadingSegment = Library:FormatLabel(Library.Name)
 	local fps = 0
-	local frameMs = 0
+	local ping = 0
+
+	--- Network ping, in milliseconds.
+	---
+	--- This segment used to show FRAME TIME, which is 1000/FPS -- arithmetically
+	--- redundant with the FPS reading sitting right next to it, and read by
+	--- everyone as ping, because "MS" beside a framerate in a game overlay means
+	--- ping. So show the thing people were already reading it as.
+	---
+	--- Wrapped: Stats is present in a real client but not in the test mock, and
+	--- the item name has changed across engine versions, so a miss falls back to
+	--- the last good number rather than blanking the segment.
+	local function readPing()
+		local ok, value = pcall(function()
+			local stats = game:GetService("Stats")
+			local item = stats.Network.ServerStatsItem["Data Ping"]
+			return item:GetValue()
+		end)
+		if ok and type(value) == "number" and value > 0 then
+			return math.floor(value + 0.5)
+		end
+		return ping
+	end
 
 	local function refreshWatermark()
 		if Library.Unloaded then
@@ -562,7 +584,7 @@ function Overlays.Install(Library)
 		setSegments({
 			leadingSegment,
 			("%d FPS"):format(fps),
-			("%d MS"):format(frameMs),
+			("%d MS"):format(ping),
 			tostring(os.date("%H:%M:%S")),
 		})
 	end
@@ -585,7 +607,7 @@ function Overlays.Install(Library)
 		-- a single hitch does not make the readout jump.
 		local average = frameTime / frameCount
 		fps = average > 0 and math.floor(1 / average + 0.5) or 0
-		frameMs = math.floor(average * 1000 + 0.5)
+		ping = readPing()
 
 		frameCount = 0
 		frameTime = 0
@@ -2790,8 +2812,13 @@ function Window.Install(Library)
 
 		self.Indicator.Visible = true
 
-		local position = UDim2.new((index - 1) / count, 0, 1, 0)
-		local size = UDim2.new(1 / count, 0, 0, Sizes.Indicator)
+		-- Read the active button's real geometry rather than recomputing an
+		-- equal share. Tabs are sized to their own text now, so any independent
+		-- arithmetic here would drift out from under them -- and the underline
+		-- landing beside the tab it marks is worse than no underline at all.
+		local button = self.ActiveTab.Button
+		local position = UDim2.new(0, button.Position.X.Offset, 1, 0)
+		local size = UDim2.new(0, button.Size.X.Offset, 0, Sizes.Indicator)
 
 		if animate then
 			Library:Tween(self.Indicator, { Position = position, Size = size }, Library.Motion.Fast)
@@ -2803,15 +2830,53 @@ function Window.Install(Library)
 		return self
 	end
 
+	--- Breathing room either side of a tab label, so adjacent tabs do not run
+	--- into each other once they are sized to their own text.
+	local TAB_PAD = 18
+	--- Nothing narrower than this, however cramped the strip: a 12px tab is not
+	--- a target, it is a smear.
+	local TAB_MIN = 34
+
 	function WindowMeta:LayoutTabs()
 		local count = #self.Tabs
 		if count == 0 then
 			return self
 		end
 
+		-- Tabs are sized to their OWN TEXT, not to an equal share of the strip.
+		--
+		-- Equal shares are what made a long name unreadable next to a short one:
+		-- with 11 tabs everything got 1/11 of the width, so "RAGE SETTINGS" was
+		-- truncated to "RAGE SETTIN." while "TROLL" sat in a half-empty cell --
+		-- and shrinking the window truncated every one of them to "LEGI...".
+		-- Proportional widths mean a long label gives up the same FRACTION as a
+		-- short one, so they stay legible together at any window size.
+		local widths, total = {}, 0
 		for index, tab in self.Tabs do
-			tab.Button.Position = UDim2.new((index - 1) / count, 0, 0, 0)
-			tab.Button.Size = UDim2.new(1 / count, 0, 1, 0)
+			local text = tab.Label and tab.Label.Text or ""
+			local width = Util.TextSize(text, Sizes.TextSmall, Library.Fonts.Title).X + TAB_PAD
+			widths[index] = width
+			total += width
+		end
+
+		local available = self.TabStrip.AbsoluteSize.X
+		-- Before the first layout pass the strip has no width yet; natural widths
+		-- stand until a resize brings us back through here.
+		local scale = (available > 0 and total > 0) and (available / total) or 1
+
+		local x = 0
+		for index, tab in self.Tabs do
+			local width = math.max(TAB_MIN, math.floor(widths[index] * scale))
+
+			-- The last tab absorbs the rounding so the row ends flush with the
+			-- strip instead of leaving a one-pixel gap that reads as a seam.
+			if index == count and available > 0 then
+				width = math.max(TAB_MIN, math.floor(available - x))
+			end
+
+			tab.Button.Position = UDim2.fromOffset(math.floor(x), 0)
+			tab.Button.Size = UDim2.new(0, width, 1, 0)
+			x += width
 		end
 
 		self:PlaceIndicator(false)
@@ -7884,6 +7949,18 @@ local function install(Library, element, options, host, pill, stroke, value, hit
 			return
 		end
 
+		-- An UNBOUND picker does not belong on the HUD. It used to register
+		-- anyway, so a hub that declares ten keybinds and binds none showed ten
+		-- rows of "KEYBIND [NONE]" -- a list of things that cannot happen,
+		-- occupying the corner of the screen from the moment the script loaded.
+		--
+		-- Remove rather than skip: a picker that is CLEARED back to None has to
+		-- leave the list, not sit there stale at its old key.
+		if element.Value == nil or element.Value == "None" then
+			list:Remove(overlayId)
+			return
+		end
+
 		list:Set(overlayId, {
 			Text = element.Text,
 			Key = element.Value,
@@ -8557,6 +8634,16 @@ function Numeric.New(Library, element, options, config)
 	-- A bare number reads as a bare number, so an owner may name a better default
 	-- than nothing -- the overwhelmingly common progress readout is a percentage.
 	element.Suffix = tostring(options.Suffix or config.Suffix or "")
+	-- Whether a whole number is allowed to print as one. OFF for a ProgressBar,
+	-- whose padded decimals hold a column of readouts aligned; ON for a Slider,
+	-- which is a control you set rather than a column you scan, and where
+	-- "10.0%" / "0.0%" is just noise around the number you actually wanted.
+	-- An owner can still force either way per element.
+	if options.TrimZeros ~= nil then
+		element.TrimZeros = options.TrimZeros == true
+	else
+		element.TrimZeros = config.TrimZeros == true
+	end
 	-- Left unset for an owner that does not offer it, rather than set to false: a
 	-- ProgressBar carrying a Compact field would advertise an option that does
 	-- nothing. Everything below reads it for truth, so absent and off are one.
@@ -8653,6 +8740,26 @@ function Numeric.New(Library, element, options, config)
 		return Util.FormatNumber(value, element.Rounding)
 	end
 
+	--- What the user actually reads. `%.2f` on a slider that happens to be
+	--- sitting on a whole number prints "10.00%" / "0.0%", which is noise: the
+	--- decimals exist so the value CAN be fractional, not so it always looks
+	--- fractional. Trim a trailing zero run, and the now-orphaned point with it.
+	---
+	--- Deliberately NOT used by relayout. The readout column is sized from the
+	--- widest value the slider can ever show, and trimming only ever shortens,
+	--- so measuring the UNtrimmed bounds keeps that column still while the
+	--- displayed text gets shorter. Measuring the trimmed form instead would let
+	--- a fractional mid-drag value overflow a column sized from two whole-number
+	--- endpoints -- exactly the twitch the sizing exists to prevent.
+	local function displayValue(value)
+		local text = formatValue(value)
+		if element.TrimZeros and element.Rounding > 0 and string.find(text, ".", 1, true) then
+			text = string.gsub(text, "0+$", "")
+			text = string.gsub(text, "%.$", "")
+		end
+		return text
+	end
+
 	local function normalize(value)
 		local low, high = bounds()
 		local number = tonumber(value)
@@ -8731,7 +8838,7 @@ function Numeric.New(Library, element, options, config)
 
 		bar:Paint(alpha, self.Disabled and "AccentDim" or "Accent")
 
-		readout.Text = formatValue(self.Value) .. self.Suffix
+		readout.Text = displayValue(self.Value) .. self.Suffix
 
 		return self
 	end
@@ -9164,7 +9271,7 @@ function Slider.New(Library, container, index, options)
 	local Sizes = Library.Sizes
 	-- Compact is the slider's alone: a readout with no drag has nothing to gain
 	-- from losing its label.
-	local numeric = Numeric.New(Library, element, options, { Compact = true })
+	local numeric = Numeric.New(Library, element, options, { Compact = true, TrimZeros = true })
 	local trough = numeric.Trough
 
 	-- Taller and wider than the trough: a Track-tall grab target is a nuisance,
@@ -9242,6 +9349,100 @@ function Slider.New(Library, container, index, options)
 
 		dragging = false
 		numeric.SetActive(false, true)
+	end))
+
+	--==============================================================
+	-- type-in
+	--==============================================================
+	--
+	-- A drag cannot express "exactly 37". On a 0-1000 track one pixel is several
+	-- units, so any precise value is unreachable by pointer -- click the readout
+	-- and type it instead.
+	--
+	-- The readout stays a TextLabel and an editable TextBox sits over it, rather
+	-- than making the readout itself a TextBox. A TextBox renders its own
+	-- selection and caret and is focusable by stray clicks, and this control is a
+	-- readout ~100% of the time; borrowing it only while editing keeps the
+	-- resting state exactly as designed.
+
+	local readout = numeric.Readout
+
+	local entry = Library:Create("TextBox", {
+		Name = "Entry",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = readout.Font,
+		Size = UDim2.fromScale(1, 1),
+		Text = "",
+		TextSize = readout.TextSize,
+		TextXAlignment = readout.TextXAlignment,
+		Theme = { TextColor3 = "Accent" },
+		Visible = false,
+		Parent = readout,
+	})
+
+	-- Sits over the readout only. Sized off the readout so it tracks relayout.
+	local editHit = Library:HitButton(readout, {
+		Name = "EditHit",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1),
+	})
+
+	local editing = false
+
+	local function endEdit(commit)
+		if not editing then
+			return
+		end
+		editing = false
+
+		entry.Visible = false
+		readout.Visible = true
+		editHit.Visible = true
+		numeric.SetActive(false, true)
+
+		-- SetValue normalises and clamps, so nonsense and out-of-range typing are
+		-- already handled; only a non-number needs rejecting here.
+		local typed = commit and tonumber((string.gsub(entry.Text, "[^%d%.%-]", "")))
+		if typed then
+			element:SetValue(typed)
+		else
+			element:Display()
+		end
+	end
+
+	local function beginEdit()
+		if editing or Library.Unloaded or element.Disabled then
+			return
+		end
+		editing = true
+
+		-- Seed with the RAW number and no suffix: the user is editing a value,
+		-- not a label, and "10%" would have to be stripped back off again.
+		entry.Text = tostring(element.Value)
+		readout.Visible = false
+		editHit.Visible = false
+		entry.Visible = true
+		numeric.SetActive(true, true)
+
+		entry:CaptureFocus()
+		entry.CursorPosition = #entry.Text + 1
+		entry.SelectionStart = 1
+	end
+
+	Library:GiveSignal(editHit.InputBegan:Connect(function(input)
+		if isDragInput(input) then
+			beginEdit()
+		end
+	end))
+
+	-- enterPressed is false when focus is lost by clicking away, which still
+	-- commits: losing a typed value because you clicked elsewhere is worse than
+	-- committing one you may not have finished.
+	Library:GiveSignal(entry.FocusLost:Connect(function()
+		endEdit(true)
 	end))
 
 	return Base.Finish(element, Library.Options)

@@ -85,6 +85,44 @@ step("AddTab x3", function()
 	Tabs.Settings = Window:AddTab("Settings")
 end)
 
+--- Tabs are sized to their own text. Equal shares are what made a long name
+--- truncate ("RAGE SETTIN.") next to a short one sitting in a half-empty cell,
+--- and made every tab collapse to "LEGI..." when the window shrank.
+step("tabs are sized to their labels, not to an equal share", function()
+	Window:LayoutTabs()
+
+	-- "Main" is shorter than "Settings", so under equal shares these would be
+	-- identical and under content sizing they must not be.
+	local short = Tabs.Main
+	local long = Tabs.Settings
+	local sw = short.Button.Size.X.Offset
+	local lw = long.Button.Size.X.Offset
+	check("a longer label gets a wider tab", lw > sw, ("Settings=%d Main=%d"):format(lw, sw))
+	check("widths are offsets, not scale", short.Button.Size.X.Scale == 0,
+		tostring(short.Button.Size.X.Scale))
+
+	-- No gaps and no overlaps: each tab starts where the previous one ended.
+	local expected, bad = 0, 0
+	for _, tab in Window.Tabs do
+		if tab.Button.Position.X.Offset ~= expected then
+			bad += 1
+		end
+		expected += tab.Button.Size.X.Offset
+	end
+	check("tabs tile with no seams", bad == 0, ("%d misaligned"):format(bad))
+
+	-- The underline has to track the real geometry now, not recompute a share.
+	Window:SetTab(long)
+	check("the indicator sits under the active tab",
+		Window.Indicator.Position.X.Offset == long.Button.Position.X.Offset
+			and Window.Indicator.Size.X.Offset == long.Button.Size.X.Offset,
+		("ind=%d,%d tab=%d,%d"):format(
+			Window.Indicator.Position.X.Offset, Window.Indicator.Size.X.Offset,
+			long.Button.Position.X.Offset, long.Button.Size.X.Offset))
+
+	Window:SetTab(Tabs.Main)
+end)
+
 local Left, Right
 step("groupboxes", function()
 	Left = Tabs.Main:AddLeftGroupbox("Aimbot")
@@ -429,7 +467,21 @@ step("the same bounds read the same on both", function()
 		bar:SetValue(value)
 		local tag = tostring(value)
 		check("both clamp and round " .. tag, slider.Value == bar.Value, ("%s vs %s"):format(tostring(slider.Value), tostring(bar.Value)))
-		check("both render " .. tag, sliderText.Text == barText.Text, sliderText.Text .. " vs " .. barText.Text)
+
+		-- They no longer render IDENTICALLY, on purpose: a Slider trims trailing
+		-- zeros ("10u", not "10.0u") because it is a control you set and the
+		-- padding is noise around the number you wanted, while a ProgressBar
+		-- keeps them because it is a readout that animates and a changing width
+		-- makes a column jitter. What must still hold is that the bar's text is
+		-- the slider's text with zeros put back -- i.e. they disagree ONLY about
+		-- trailing zeros, never about the number.
+		local trimmed = string.gsub(string.gsub(barText.Text, "u$", ""), "0+$", "")
+		trimmed = string.gsub(trimmed, "%.$", "") .. "u"
+		check(
+			"both render the same number " .. tag,
+			sliderText.Text == trimmed,
+			sliderText.Text .. " vs " .. barText.Text .. " (trimmed to " .. trimmed .. ")"
+		)
 		check(
 			"both light the same cells at " .. tag,
 			segmentsPainted(slider, "Accent") == segmentsPainted(bar, "Accent"),
@@ -458,6 +510,86 @@ end)
 -- agree just as well after the rounding step is dropped for both. This pins it
 -- from the bar's side with an ABSOLUTE value, so deleting Util.Round from the
 -- shared row fails here as well as at "slider rounding=2".
+--- A slider's decimals exist so the value CAN be fractional, not so it always
+--- looks fractional. "10.0%" on a whole number is noise.
+step("a slider trims trailing zeros but keeps real decimals", function()
+	local s = Left:AddSlider("TrimSlider", { Text = "t", Min = 0, Max = 100, Rounding = 2, Suffix = "%" })
+	local text = s.Row:FindFirstChild("Readout")
+
+	s:SetValue(10)
+	check("whole number drops the point entirely", text.Text == "10%", text.Text)
+
+	s:SetValue(0)
+	check("zero reads as zero", text.Text == "0%", text.Text)
+
+	s:SetValue(12.5)
+	check("one real decimal survives", text.Text == "12.5%", text.Text)
+
+	s:SetValue(12.25)
+	check("two real decimals survive", text.Text == "12.25%", text.Text)
+
+	s:SetValue(12.1)
+	check("only the trailing zero goes", text.Text == "12.1%", text.Text)
+
+	-- The whole point of measuring the UNtrimmed bounds: the column must stay
+	-- wide enough for the longest value the slider can ever show, or the track
+	-- twitches as digits come and go mid-drag.
+	local wide = text.Size.X.Offset
+	s:SetValue(100)
+	check("column does not shrink when the text does", text.Size.X.Offset == wide,
+		("%d vs %d"):format(text.Size.X.Offset, wide))
+	s:Destroy()
+end)
+
+--- A drag cannot express "exactly 37" on a wide track; typing can.
+step("a slider readout can be typed into", function()
+	local s = Left:AddSlider("TypeSlider", { Text = "ty", Min = 0, Max = 1000, Rounding = 0 })
+	local text = s.Row:FindFirstChild("Readout")
+	local entry = text and text:FindFirstChild("Entry")
+	local hit = text and text:FindFirstChild("EditHit")
+
+	check("the readout carries an entry box", entry ~= nil)
+	check("and a hit target to open it", hit ~= nil)
+	check("the entry is hidden at rest", entry ~= nil and entry.Visible == false)
+
+	if entry and hit then
+		local press = Instance.new("InputObject")
+		press.UserInputType = Enum.UserInputType.MouseButton1
+
+		-- Drive the REAL path. Setting entry.Visible by hand does not open the
+		-- editor -- endEdit guards on its own `editing` flag, so a test that
+		-- fakes the visibility tests nothing.
+		local function typeIn(str)
+			hit.InputBegan:Fire(press)
+			entry.Text = str
+			entry.FocusLost:Fire(true)
+		end
+
+		hit.InputBegan:Fire(press)
+		check("clicking the readout opens the entry", entry.Visible == true)
+		check("and hides the label underneath", text.Visible == false)
+		entry.FocusLost:Fire(true)
+		check("closing restores the label", text.Visible == true and entry.Visible == false)
+
+		typeIn("37")
+		check("typing a number sets the value", s.Value == 37, tostring(s.Value))
+
+		-- Out of range is clamped by SetValue, not rejected.
+		typeIn("99999")
+		check("out of range clamps to Max", s.Value == 1000, tostring(s.Value))
+
+		-- Garbage must not wipe the value.
+		local before = s.Value
+		typeIn("not a number")
+		check("garbage leaves the value alone", s.Value == before, tostring(s.Value))
+
+		-- A pasted "37%" should still land on 37 rather than nil.
+		typeIn("42%")
+		check("a stray suffix is stripped", s.Value == 42, tostring(s.Value))
+	end
+	s:Destroy()
+end)
+
 step("a progress bar rounds to its decimals", function()
 	local bar = Left:AddProgressBar("RoundBar", { Text = "r", Min = 0, Max = 1, Rounding = 2 })
 	bar:SetValue(0.126)
@@ -919,6 +1051,41 @@ step("KeybindList Set/Remove", function()
 	Library.KeybindList:Set("smoke", { Text = "Test", Key = "F", Mode = "Toggle", Active = true })
 	Library.KeybindList:Set("smoke", { Text = "Test", Key = "G", Mode = "Hold", Active = false })
 	Library.KeybindList:Remove("smoke")
+end)
+
+--- An unbound picker used to register anyway, so a hub that declares ten
+--- keybinds and binds none showed ten rows of "KEYBIND [NONE]" in the corner
+--- from the moment it loaded -- a list of things that cannot happen.
+step("an unbound keybind stays off the HUD list", function()
+	-- The panel lives under HudHolder, not the window, and rows are frames
+	-- named "Bind" parented straight to it.
+	local panel = Library.HudHolder and Library.HudHolder:FindFirstChild("Keybinds", true)
+	check("the keybind panel exists", panel ~= nil)
+	local function rows()
+		if not panel then
+			return -1
+		end
+		local n = 0
+		for _, d in panel:GetChildren() do
+			if d.Name == "Bind" then
+				n += 1
+			end
+		end
+		return n
+	end
+
+	local before = rows()
+
+	local lbl = Left:AddLabel("BindHost")
+	local kp = lbl:AddKeyPicker("SmokeUnbound", { Default = "None", Text = "Unbound" })
+	check("an unbound picker adds no row", rows() == before, ("%d vs %d"):format(rows(), before))
+
+	kp:SetValue("F")
+	check("binding a key adds one", rows() == before + 1, ("%d vs %d"):format(rows(), before))
+
+	-- Clearing has to REMOVE it, not leave it stale at the old key.
+	kp:SetValue("None")
+	check("clearing takes it away again", rows() == before, ("%d vs %d"):format(rows(), before))
 end)
 
 step("render frames", function()

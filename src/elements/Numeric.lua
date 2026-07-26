@@ -54,6 +54,16 @@ function Numeric.New(Library, element, options, config)
 	-- A bare number reads as a bare number, so an owner may name a better default
 	-- than nothing -- the overwhelmingly common progress readout is a percentage.
 	element.Suffix = tostring(options.Suffix or config.Suffix or "")
+	-- Whether a whole number is allowed to print as one. OFF for a ProgressBar,
+	-- whose padded decimals hold a column of readouts aligned; ON for a Slider,
+	-- which is a control you set rather than a column you scan, and where
+	-- "10.0%" / "0.0%" is just noise around the number you actually wanted.
+	-- An owner can still force either way per element.
+	if options.TrimZeros ~= nil then
+		element.TrimZeros = options.TrimZeros == true
+	else
+		element.TrimZeros = config.TrimZeros == true
+	end
 	-- Left unset for an owner that does not offer it, rather than set to false: a
 	-- ProgressBar carrying a Compact field would advertise an option that does
 	-- nothing. Everything below reads it for truth, so absent and off are one.
@@ -150,6 +160,26 @@ function Numeric.New(Library, element, options, config)
 		return Util.FormatNumber(value, element.Rounding)
 	end
 
+	--- What the user actually reads. `%.2f` on a slider that happens to be
+	--- sitting on a whole number prints "10.00%" / "0.0%", which is noise: the
+	--- decimals exist so the value CAN be fractional, not so it always looks
+	--- fractional. Trim a trailing zero run, and the now-orphaned point with it.
+	---
+	--- Deliberately NOT used by relayout. The readout column is sized from the
+	--- widest value the slider can ever show, and trimming only ever shortens,
+	--- so measuring the UNtrimmed bounds keeps that column still while the
+	--- displayed text gets shorter. Measuring the trimmed form instead would let
+	--- a fractional mid-drag value overflow a column sized from two whole-number
+	--- endpoints -- exactly the twitch the sizing exists to prevent.
+	local function displayValue(value)
+		local text = formatValue(value)
+		if element.TrimZeros and element.Rounding > 0 and string.find(text, ".", 1, true) then
+			text = string.gsub(text, "0+$", "")
+			text = string.gsub(text, "%.$", "")
+		end
+		return text
+	end
+
 	local function normalize(value)
 		local low, high = bounds()
 		local number = tonumber(value)
@@ -228,7 +258,7 @@ function Numeric.New(Library, element, options, config)
 
 		bar:Paint(alpha, self.Disabled and "AccentDim" or "Accent")
 
-		readout.Text = formatValue(self.Value) .. self.Suffix
+		readout.Text = displayValue(self.Value) .. self.Suffix
 
 		return self
 	end

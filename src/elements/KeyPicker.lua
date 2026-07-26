@@ -169,6 +169,18 @@ local function install(Library, element, options, host, pill, stroke, value, hit
 			return
 		end
 
+		-- An UNBOUND picker does not belong on the HUD. It used to register
+		-- anyway, so a hub that declares ten keybinds and binds none showed ten
+		-- rows of "KEYBIND [NONE]" -- a list of things that cannot happen,
+		-- occupying the corner of the screen from the moment the script loaded.
+		--
+		-- Remove rather than skip: a picker that is CLEARED back to None has to
+		-- leave the list, not sit there stale at its old key.
+		if element.Value == nil or element.Value == "None" then
+			list:Remove(overlayId)
+			return
+		end
+
 		list:Set(overlayId, {
 			Text = element.Text,
 			Key = element.Value,

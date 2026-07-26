@@ -25,7 +25,7 @@ function Slider.New(Library, container, index, options)
 	local Sizes = Library.Sizes
 	-- Compact is the slider's alone: a readout with no drag has nothing to gain
 	-- from losing its label.
-	local numeric = Numeric.New(Library, element, options, { Compact = true })
+	local numeric = Numeric.New(Library, element, options, { Compact = true, TrimZeros = true })
 	local trough = numeric.Trough
 
 	-- Taller and wider than the trough: a Track-tall grab target is a nuisance,
@@ -103,6 +103,100 @@ function Slider.New(Library, container, index, options)
 
 		dragging = false
 		numeric.SetActive(false, true)
+	end))
+
+	--==============================================================
+	-- type-in
+	--==============================================================
+	--
+	-- A drag cannot express "exactly 37". On a 0-1000 track one pixel is several
+	-- units, so any precise value is unreachable by pointer -- click the readout
+	-- and type it instead.
+	--
+	-- The readout stays a TextLabel and an editable TextBox sits over it, rather
+	-- than making the readout itself a TextBox. A TextBox renders its own
+	-- selection and caret and is focusable by stray clicks, and this control is a
+	-- readout ~100% of the time; borrowing it only while editing keeps the
+	-- resting state exactly as designed.
+
+	local readout = numeric.Readout
+
+	local entry = Library:Create("TextBox", {
+		Name = "Entry",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = readout.Font,
+		Size = UDim2.fromScale(1, 1),
+		Text = "",
+		TextSize = readout.TextSize,
+		TextXAlignment = readout.TextXAlignment,
+		Theme = { TextColor3 = "Accent" },
+		Visible = false,
+		Parent = readout,
+	})
+
+	-- Sits over the readout only. Sized off the readout so it tracks relayout.
+	local editHit = Library:HitButton(readout, {
+		Name = "EditHit",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1),
+	})
+
+	local editing = false
+
+	local function endEdit(commit)
+		if not editing then
+			return
+		end
+		editing = false
+
+		entry.Visible = false
+		readout.Visible = true
+		editHit.Visible = true
+		numeric.SetActive(false, true)
+
+		-- SetValue normalises and clamps, so nonsense and out-of-range typing are
+		-- already handled; only a non-number needs rejecting here.
+		local typed = commit and tonumber((string.gsub(entry.Text, "[^%d%.%-]", "")))
+		if typed then
+			element:SetValue(typed)
+		else
+			element:Display()
+		end
+	end
+
+	local function beginEdit()
+		if editing or Library.Unloaded or element.Disabled then
+			return
+		end
+		editing = true
+
+		-- Seed with the RAW number and no suffix: the user is editing a value,
+		-- not a label, and "10%" would have to be stripped back off again.
+		entry.Text = tostring(element.Value)
+		readout.Visible = false
+		editHit.Visible = false
+		entry.Visible = true
+		numeric.SetActive(true, true)
+
+		entry:CaptureFocus()
+		entry.CursorPosition = #entry.Text + 1
+		entry.SelectionStart = 1
+	end
+
+	Library:GiveSignal(editHit.InputBegan:Connect(function(input)
+		if isDragInput(input) then
+			beginEdit()
+		end
+	end))
+
+	-- enterPressed is false when focus is lost by clicking away, which still
+	-- commits: losing a typed value because you clicked elsewhere is worse than
+	-- committing one you may not have finished.
+	Library:GiveSignal(entry.FocusLost:Connect(function()
+		endEdit(true)
 	end))
 
 	return Base.Finish(element, Library.Options)

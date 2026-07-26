@@ -544,8 +544,13 @@ function Window.Install(Library)
 
 		self.Indicator.Visible = true
 
-		local position = UDim2.new((index - 1) / count, 0, 1, 0)
-		local size = UDim2.new(1 / count, 0, 0, Sizes.Indicator)
+		-- Read the active button's real geometry rather than recomputing an
+		-- equal share. Tabs are sized to their own text now, so any independent
+		-- arithmetic here would drift out from under them -- and the underline
+		-- landing beside the tab it marks is worse than no underline at all.
+		local button = self.ActiveTab.Button
+		local position = UDim2.new(0, button.Position.X.Offset, 1, 0)
+		local size = UDim2.new(0, button.Size.X.Offset, 0, Sizes.Indicator)
 
 		if animate then
 			Library:Tween(self.Indicator, { Position = position, Size = size }, Library.Motion.Fast)
@@ -557,15 +562,53 @@ function Window.Install(Library)
 		return self
 	end
 
+	--- Breathing room either side of a tab label, so adjacent tabs do not run
+	--- into each other once they are sized to their own text.
+	local TAB_PAD = 18
+	--- Nothing narrower than this, however cramped the strip: a 12px tab is not
+	--- a target, it is a smear.
+	local TAB_MIN = 34
+
 	function WindowMeta:LayoutTabs()
 		local count = #self.Tabs
 		if count == 0 then
 			return self
 		end
 
+		-- Tabs are sized to their OWN TEXT, not to an equal share of the strip.
+		--
+		-- Equal shares are what made a long name unreadable next to a short one:
+		-- with 11 tabs everything got 1/11 of the width, so "RAGE SETTINGS" was
+		-- truncated to "RAGE SETTIN." while "TROLL" sat in a half-empty cell --
+		-- and shrinking the window truncated every one of them to "LEGI...".
+		-- Proportional widths mean a long label gives up the same FRACTION as a
+		-- short one, so they stay legible together at any window size.
+		local widths, total = {}, 0
 		for index, tab in self.Tabs do
-			tab.Button.Position = UDim2.new((index - 1) / count, 0, 0, 0)
-			tab.Button.Size = UDim2.new(1 / count, 0, 1, 0)
+			local text = tab.Label and tab.Label.Text or ""
+			local width = Util.TextSize(text, Sizes.TextSmall, Library.Fonts.Title).X + TAB_PAD
+			widths[index] = width
+			total += width
+		end
+
+		local available = self.TabStrip.AbsoluteSize.X
+		-- Before the first layout pass the strip has no width yet; natural widths
+		-- stand until a resize brings us back through here.
+		local scale = (available > 0 and total > 0) and (available / total) or 1
+
+		local x = 0
+		for index, tab in self.Tabs do
+			local width = math.max(TAB_MIN, math.floor(widths[index] * scale))
+
+			-- The last tab absorbs the rounding so the row ends flush with the
+			-- strip instead of leaving a one-pixel gap that reads as a seam.
+			if index == count and available > 0 then
+				width = math.max(TAB_MIN, math.floor(available - x))
+			end
+
+			tab.Button.Position = UDim2.fromOffset(math.floor(x), 0)
+			tab.Button.Size = UDim2.new(0, width, 1, 0)
+			x += width
 		end
 
 		self:PlaceIndicator(false)
