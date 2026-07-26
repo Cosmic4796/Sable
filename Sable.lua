@@ -2851,15 +2851,37 @@ function Window.Install(Library)
 		-- and shrinking the window truncated every one of them to "LEGI...".
 		-- Proportional widths mean a long label gives up the same FRACTION as a
 		-- short one, so they stay legible together at any window size.
-		local widths, total = {}, 0
-		for index, tab in self.Tabs do
-			local text = tab.Label and tab.Label.Text or ""
-			local width = Util.TextSize(text, Sizes.TextSmall, Library.Fonts.Title).X + TAB_PAD
-			widths[index] = width
-			total += width
+		local available = self.TabStrip.AbsoluteSize.X
+
+		-- LETTERSPACING IS DROPPED BEFORE TEXT IS. Chrome() interleaves spaces,
+		-- which roughly DOUBLES every label -- lovely with four tabs, fatal with
+		-- eleven, where it is the difference between "RAGE SETTINGS" fitting and
+		-- being cut to "RAGE SE.". Spacing is styling; the word is information,
+		-- so measure both and spend the room on the word.
+		local function measureAll(spaced)
+			local widths, total = {}, 0
+			for index, tab in self.Tabs do
+				local text = spaced and Library:Chrome(tab.Name) or Library:FormatLabel(tab.Name)
+				widths[index] = Util.TextSize(text, Sizes.TextSmall, Library.Fonts.Title).X + TAB_PAD
+				total += widths[index]
+			end
+			return widths, total
 		end
 
-		local available = self.TabStrip.AbsoluteSize.X
+		local widths, total = measureAll(true)
+		local spaced = true
+
+		-- Unspaced whenever the spaced form does not fit -- including when
+		-- neither fits, because the tighter text truncates less badly.
+		if available > 0 and total > available then
+			widths, total = measureAll(false)
+			spaced = false
+		end
+
+		for _, tab in self.Tabs do
+			tab.Label.Text = spaced and Library:Chrome(tab.Name) or Library:FormatLabel(tab.Name)
+		end
+
 		-- Before the first layout pass the strip has no width yet; natural widths
 		-- stand until a resize brings us back through here.
 		local scale = (available > 0 and total > 0) and (available / total) or 1
@@ -3261,6 +3283,15 @@ function Window.Install(Library)
 			Shown = false,
 			FadeToken = 0,
 		}, WindowMeta)
+
+		-- Tab widths are OFFSETS now (sized to their own text), so unlike the old
+		-- equal-share scale they do not follow the window on their own. Without
+		-- this the strip keeps whatever width it was first laid out at: resize
+		-- the window wider and the tabs stay bunched in the left of an empty
+		-- strip; resize it narrower and they overflow past the edge.
+		Library:GiveSignal(tabStrip:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+			window:LayoutTabs()
+		end))
 
 		Library:MakeDraggable(titleBar, root)
 
