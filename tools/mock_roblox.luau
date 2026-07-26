@@ -832,6 +832,12 @@ function __getMouse()
 end
 
 local userInput = {
+	-- A desktop profile by default. Sable reads both to decide whether the menu
+	-- keybind is reachable at all; tests drive the touch path via
+	-- Library.ForceTouchUI rather than by flipping these, so the default stays
+	-- honest about what the harness is simulating.
+	TouchEnabled = false,
+	KeyboardEnabled = true,
 	InputBegan = newSignal(),
 	InputEnded = newSignal(),
 	InputChanged = newSignal(),

@@ -241,6 +241,73 @@ end)
 --- Grouping a hub by "sub-option reveals under its parent" only works if a
 --- dependency box can hold ANOTHER one -- e.g. FOV > Fill > Transparency.
 --- Nothing forbade it, but nothing had ever done it either.
+--- On a touch-primary device the menu keybind is UNREACHABLE, so without an
+--- on-screen toggle the library loads and can never be opened. That makes this
+--- the one mobile feature that is correctness rather than polish.
+step("touch UI detection and the on-screen toggle", function()
+	-- The harness runs a desktop profile, so the button must NOT exist.
+	check("desktop is not touch-primary", Library:IsTouchUI() == false,
+		tostring(Library:IsTouchUI()))
+	Library:EnsureTouchToggle()
+	check("no toggle button on desktop",
+		Library.HudHolder:FindFirstChild("TouchToggle", true) == nil)
+
+	-- Force the touch path. Tests drive it through the override rather than by
+	-- lying to the mock, so the mock keeps describing one honest device.
+	Library.ForceTouchUI = true
+	check("the override wins over detection", Library:IsTouchUI() == true)
+
+	local button = Library:EnsureTouchToggle()
+	check("a toggle button appears", button ~= nil and button.Parent ~= nil)
+	check("it lives on the HUD layer", button and button.Parent == Library.HudHolder,
+		button and tostring(button.Parent) or "nil")
+
+	-- Idempotent: two windows must not stack two buttons.
+	local again = Library:EnsureTouchToggle()
+	check("calling again returns the same button", again == button)
+
+	local count = 0
+	for _, d in Library.HudHolder:GetChildren() do
+		if d.Name == "TouchToggle" then
+			count += 1
+		end
+	end
+	check("exactly one toggle exists", count == 1, tostring(count))
+
+	-- It must get out of the way when the menu is up, or it floats over it.
+	Library:SetOpen(true)
+	drain()
+	check("hidden while the menu is open", button.Visible == false)
+	Library:SetOpen(false)
+	drain()
+	check("shown again when the menu closes", button.Visible == true)
+
+	Library.ForceTouchUI = nil
+end)
+
+--- 620x660 is taller than a phone in landscape, and a window cannot be dragged
+--- or resized back inside the viewport once its footer is off-screen.
+step("the default window size is clamped to the viewport", function()
+	local viewport = Library.ScreenGui.AbsoluteSize
+	local w = Library:CreateWindow({ Title = "clamped", AutoShow = false })
+	local size = w.Frame.Size
+
+	check("width fits the viewport", size.X.Offset <= math.max(280, viewport.X - 24),
+		("w=%d viewport=%d"):format(size.X.Offset, viewport.X))
+	check("height fits the viewport", size.Y.Offset <= math.max(220, viewport.Y - 24),
+		("h=%d viewport=%d"):format(size.Y.Offset, viewport.Y))
+	check("and it is never collapsed to nothing", size.X.Offset >= 280 and size.Y.Offset >= 220,
+		("%dx%d"):format(size.X.Offset, size.Y.Offset))
+
+	-- An explicit Size is still honoured: clamping is a DEFAULT, not a cap.
+	local exact = Library:CreateWindow({
+		Title = "exact", AutoShow = false, Size = UDim2.fromOffset(1200, 900),
+	})
+	check("an explicit Size is left alone",
+		exact.Frame.Size.X.Offset == 1200 and exact.Frame.Size.Y.Offset == 900,
+		("%dx%d"):format(exact.Frame.Size.X.Offset, exact.Frame.Size.Y.Offset))
+end)
+
 step("dependency boxes nest", function()
 	local outerToggle = Left:AddToggle("NestOuter", { Text = "Outer", Default = false })
 	local outer = Left:AddDependencyBox()

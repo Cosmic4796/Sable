@@ -3168,8 +3168,22 @@ function Window.Install(Library)
 			Library.MenuFadeTime = config.MenuFadeTime
 		end
 
+		-- 620x660 is a desktop default. On a phone in landscape that is taller
+		-- than the screen, so the footer and the bottom of every column sit off
+		-- the bottom edge with no way to reach them -- the window cannot be
+		-- resized past the viewport either. Clamp to what actually exists, with
+		-- a margin so the frame is visibly inside the screen rather than flush
+		-- against it.
 		local sizeUDim = typeof(config.Size) == "UDim2" and config.Size
-			or UDim2.fromOffset(Sizes.WindowWidth, Sizes.WindowHeight)
+		if not sizeUDim then
+			local width, height = Sizes.WindowWidth, Sizes.WindowHeight
+			local viewport = Library.ScreenGui and Library.ScreenGui.AbsoluteSize
+			if viewport and viewport.X > 0 and viewport.Y > 0 then
+				width = math.min(width, math.floor(viewport.X - 24))
+				height = math.min(height, math.floor(viewport.Y - 24))
+			end
+			sizeUDim = UDim2.fromOffset(math.max(width, 280), math.max(height, 220))
+		end
 
 		local root, stroke = Library:Panel({
 			Name = "Window",
@@ -3294,6 +3308,12 @@ function Window.Install(Library)
 		end))
 
 		Library:MakeDraggable(titleBar, root)
+
+		-- Created here rather than at library load: before a window exists there
+		-- is nothing for the button to open, and a hub that never calls
+		-- CreateWindow should not leave a stray control on screen. No-op off
+		-- touch, and idempotent across multiple windows.
+		Library:EnsureTouchToggle()
 
 		if config.Center and not (typeof(config.Position) == "UDim2") then
 			-- AbsoluteSize is still zero this frame, so centre from the intended
@@ -10011,6 +10031,28 @@ Library.CapturingInput = false
 
 Library.NotifySide = "Right"
 
+--- Touch-primary means a touchscreen AND no keyboard: a device where the menu
+--- keybind is not merely inconvenient but UNREACHABLE. A tablet with a mouse
+--- and keyboard reports TouchEnabled too and must NOT be treated as mobile,
+--- which is why both halves are tested.
+---
+--- Read once. Roblox can flip these mid-session (a controller connecting, an
+--- emulator changing profile) and a UI that re-lays-itself-out underneath the
+--- user is worse than one that picked wrong at load. `ForceTouchUI` overrides
+--- for anyone on an emulator that misreports.
+Library.TouchPrimary = UserInputService.TouchEnabled
+	and not UserInputService.KeyboardEnabled
+Library.ForceTouchUI = nil
+
+--- True when the UI should use touch affordances. Call this rather than reading
+--- TouchPrimary, so the override is honoured everywhere.
+function Library:IsTouchUI()
+	if self.ForceTouchUI ~= nil then
+		return self.ForceTouchUI == true
+	end
+	return self.TouchPrimary == true
+end
+
 Theme.Install(Library)
 Library.MenuFadeTime = Library.Motion.Fade
 
@@ -10783,6 +10825,104 @@ Library:GiveSignal(Library.InputBegan:Connect(function(input, gameProcessed)
 	end
 	if Util.InputMatches(input, Library.MenuKeybind) then
 		Library:Toggle()
+	end
+end))
+
+--==============================================================
+-- touch toggle
+--==============================================================
+--
+-- On a touch-primary device the menu keybind is not inconvenient, it is
+-- UNREACHABLE -- there is no keyboard to press INS on, so without this the
+-- library loads and the user can never open it. Everything else about mobile
+-- support is polish; this is the difference between usable and not.
+--
+-- Draggable, because a fixed button always ends up over something that
+-- matters, and touch targets cannot be nudged out of the way like a cursor.
+
+local touchToggle = nil
+
+--- Creates the on-screen toggle. Idempotent, and a no-op off touch.
+function Library:EnsureTouchToggle()
+	if touchToggle or self.Unloaded or not self:IsTouchUI() then
+		return touchToggle
+	end
+
+	local size = 46
+	local button, stroke = self:Panel({
+		Name = "TouchToggle",
+		Active = true,
+		Position = UDim2.new(0, 12, 0, 96),
+		Size = UDim2.fromOffset(size, size),
+		ZIndex = 5,
+		Hud = true,
+		Parent = self.HudHolder,
+	}, "Panel", "Accent")
+
+	local label = self:Label({
+		Name = "Label",
+		Font = self.Fonts.Title,
+		Size = UDim2.fromScale(1, 1),
+		Text = "\u{2261}", -- three bars; no image asset, so nothing to load
+		TextSize = 22,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = button,
+	}, "Accent")
+
+	local hit = self:HitButton(button, {
+		Name = "Hit",
+		Size = UDim2.fromScale(1, 1),
+	})
+
+	-- A drag must not also toggle. Track whether the touch moved and only treat
+	-- a stationary press as a tap; otherwise repositioning the button opens the
+	-- menu every time you let go of it.
+	local pressPos, moved = nil, false
+
+	self:GiveSignal(hit.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			pressPos, moved = input.Position, false
+		end
+	end))
+
+	self:GiveSignal(self.InputChanged:Connect(function(input)
+		if not pressPos then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseMovement then
+			if (input.Position - pressPos).Magnitude > 8 then
+				moved = true
+			end
+		end
+	end))
+
+	self:GiveSignal(self.InputEnded:Connect(function(input)
+		if not pressPos then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			if not moved then
+				self:Toggle()
+			end
+			pressPos, moved = nil, false
+		end
+	end))
+
+	self:MakeDraggable(button, button)
+
+	touchToggle = button
+	self.TouchToggle = button
+	return button
+end
+
+--- Hidden while the menu is open: the menu covers the screen on a phone, and a
+--- floating button on top of it reads as a stray control rather than a way out.
+Library:GiveSignal(Library.MenuToggled:Connect(function(open)
+	if touchToggle then
+		touchToggle.Visible = not open
 	end
 end))
 

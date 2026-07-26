@@ -900,8 +900,22 @@ function Window.Install(Library)
 			Library.MenuFadeTime = config.MenuFadeTime
 		end
 
+		-- 620x660 is a desktop default. On a phone in landscape that is taller
+		-- than the screen, so the footer and the bottom of every column sit off
+		-- the bottom edge with no way to reach them -- the window cannot be
+		-- resized past the viewport either. Clamp to what actually exists, with
+		-- a margin so the frame is visibly inside the screen rather than flush
+		-- against it.
 		local sizeUDim = typeof(config.Size) == "UDim2" and config.Size
-			or UDim2.fromOffset(Sizes.WindowWidth, Sizes.WindowHeight)
+		if not sizeUDim then
+			local width, height = Sizes.WindowWidth, Sizes.WindowHeight
+			local viewport = Library.ScreenGui and Library.ScreenGui.AbsoluteSize
+			if viewport and viewport.X > 0 and viewport.Y > 0 then
+				width = math.min(width, math.floor(viewport.X - 24))
+				height = math.min(height, math.floor(viewport.Y - 24))
+			end
+			sizeUDim = UDim2.fromOffset(math.max(width, 280), math.max(height, 220))
+		end
 
 		local root, stroke = Library:Panel({
 			Name = "Window",
@@ -1026,6 +1040,12 @@ function Window.Install(Library)
 		end))
 
 		Library:MakeDraggable(titleBar, root)
+
+		-- Created here rather than at library load: before a window exists there
+		-- is nothing for the button to open, and a hub that never calls
+		-- CreateWindow should not leave a stray control on screen. No-op off
+		-- touch, and idempotent across multiple windows.
+		Library:EnsureTouchToggle()
 
 		if config.Center and not (typeof(config.Position) == "UDim2") then
 			-- AbsoluteSize is still zero this frame, so centre from the intended
